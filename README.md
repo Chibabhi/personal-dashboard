@@ -1,22 +1,14 @@
-# GOAT Shield Live v2
+# GOAT Shield Live v2 Hotfix
 
-Phone-friendly real-time odds scanner + AI discipline review + paper log.
+This is a single-file hotfix. It removes the import error by placing the v2 engine inside `app.py`.
 
-## v2 upgrades
-- Auto-loads active sports from The Odds API.
-- Adds market selection: h2h/moneyline, spreads, totals.
-- Adds no-pick explanation with main blockers.
-- Keeps paper-only safety.
-
-## What this app does NOT do
-- No real-money betting.
-- No auto-login to TAB / Bet365 / Pinnacle.
-- No sportsbook scraping.
-- No bank/card details.
-- No bypassing sportsbook rules.
+## v2 features
+- Auto-load active sports from The Odds API
+- Markets: h2h/moneyline, spreads, totals
+- No-pick explanation with main blockers
+- Paper-only safety
 
 ## Streamlit Secrets
-
 ```toml
 ODDS_API_KEY = "your_real_key_here"
 OPENAI_API_KEY = ""
