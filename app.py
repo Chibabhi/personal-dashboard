@@ -1,263 +1,496 @@
 
 from __future__ import annotations
-import os, math, json, requests
+
+import os, math
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from datetime import datetime, timezone
-from collections import Counter
+from collections import Counter, defaultdict
+from typing import Any, Dict, List, Optional, Tuple
+
 import pandas as pd
+import requests
 import streamlit as st
 
-st.set_page_config(page_title="GOAT Shield Live v2", page_icon="🐐", layout="wide", initial_sidebar_state="expanded")
-ODDS_API_BASE="https://api.the-odds-api.com/v4"
-PICKS_PATH=Path("data/paper_picks.csv")
-FALLBACK_SPORTS={"baseball_mlb":"MLB","basketball_nba":"NBA","icehockey_nhl":"NHL","americanfootball_nfl":"NFL","soccer_epl":"EPL","aussierules_afl":"AFL","rugbyleague_nrl":"NRL"}
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 
-def secret(name, default=""):
-    try: return st.secrets.get(name, default)
-    except Exception: return os.environ.get(name, default)
+ODDS_API_BASE = "https://api.the-odds-api.com/v4"
+PICKS_PATH = Path("data/paper_picks.csv")
+NZ_TZ = "Pacific/Auckland"
+FALLBACK_SPORTS = {
+    "baseball_mlb": "MLB",
+    "basketball_nba": "NBA",
+    "icehockey_nhl": "NHL",
+    "americanfootball_nfl": "NFL",
+    "soccer_epl": "EPL",
+    "aussierules_afl": "AFL",
+    "rugbyleague_nrl": "NRL",
+}
+NZ_BOOK_HINTS = ("tab", "tab nz", "betcha", "entain")
+PINNACLE_HINTS = ("pinnacle",)
+BET365_HINTS = ("bet365",)
 
-def safe_float(x, default=0.0):
+
+def secret(name: str, default: str = "") -> str:
     try:
-        v=float(x)
+        return st.secrets.get(name, default)
+    except Exception:
+        return os.environ.get(name, default)
+
+
+def fnum(x: Any, default: float = 0.0) -> float:
+    try:
+        v = float(x)
         return v if math.isfinite(v) else default
-    except Exception: return default
+    except Exception:
+        return default
 
-def fetch_sports(api_key):
-    r=requests.get(f"{ODDS_API_BASE}/sports/", params={"apiKey":api_key}, timeout=25)
-    r.raise_for_status(); return r.json()
 
-def fetch_odds(api_key, sport_key, regions="us", markets="h2h"):
-    params={"apiKey":api_key,"regions":regions,"markets":markets,"oddsFormat":"decimal","dateFormat":"iso"}
-    r=requests.get(f"{ODDS_API_BASE}/sports/{sport_key}/odds/", params=params, timeout=35)
-    r.raise_for_status()
-    return r.json(), {"requests_remaining":r.headers.get("x-requests-remaining"),"requests_used":r.headers.get("x-requests-used"),"last_fetch_utc":datetime.now(timezone.utc).isoformat(timespec="seconds")}
-
-def point_val(x):
-    if x is None: return None
-    try: return float(x)
-    except Exception: return None
-
-def fmt_point(p):
-    if p is None: return ""
-    return f"+{p:g}" if p>0 else f"{p:g}"
-
-def market_label(m): return {"h2h":"Moneyline","spreads":"Spread","totals":"Total"}.get(m,m)
-
-def pick_label(m, name, point):
-    if m=="h2h": return f"{name} ML"
-    if m=="spreads": return f"{name} {fmt_point(point)}"
-    if m=="totals": return f"{name} {point:g}" if point is not None else name
-    return f"{name} {fmt_point(point)}".strip()
-
-def candidate_key(market_key, outcome): return (market_key, str(outcome.get("name","")), point_val(outcome.get("point")))
-
-def home_fav_h2h(best, home, away):
-    ho=best.get(("h2h",home,None),(0,""))[0]; ao=best.get(("h2h",away,None),(0,""))[0]
-    return bool(ho>1 and ao>1 and ho<ao)
-
-def scan_events(events, sport_key, markets):
-    out=[]
-    for event in events:
-        home=event.get("home_team","") or ""; away=event.get("away_team","") or ""; sport_title=event.get("sport_title", sport_key)
-        best={}; probs={}; pinn={}; books=Counter()
-        for bm in event.get("bookmakers",[]):
-            bm_name=bm.get("title", bm.get("key","unknown")); bmkey=str(bm.get("key","")).lower(); bmtitle=str(bm.get("title","")).lower(); is_pin=("pinnacle" in bmkey or "pinnacle" in bmtitle)
-            for mk in bm.get("markets",[]):
-                mkey=mk.get("key")
-                if mkey not in markets: continue
-                outcomes=[o for o in mk.get("outcomes",[]) if safe_float(o.get("price"))>1]
-                if len(outcomes)<2: continue
-                invs=[1/safe_float(o.get("price")) for o in outcomes]; total=sum(invs)
-                if total<=0: continue
-                for o,inv in zip(outcomes,invs):
-                    key=candidate_key(mkey,o); price=safe_float(o.get("price")); books[key]+=1
-                    if price>best.get(key,(0,""))[0]: best[key]=(price,bm_name)
-                    probs.setdefault(key,[]).append(inv/total)
-                    if is_pin: pinn[key]=price
-        hfav=home_fav_h2h(best,home,away)
-        for key,plist in probs.items():
-            mkey,name,point=key; odds,book=best.get(key,(0,""))
-            if odds<=1: continue
-            cons=sum(plist)/len(plist); implied=1/odds; edge=cons-implied
-            is_team=mkey in ("h2h","spreads") and name in (home,away)
-            is_home=is_team and name==home
-            if mkey=="h2h": is_home_fav=bool(is_home and hfav)
-            elif mkey=="spreads": is_home_fav=bool(is_home and point is not None and point<0)
-            else: is_home_fav=False
-            pin=pinn.get(key); pin_ok=bool(pin and odds>=pin)
-            out.append({"event_id":event.get("id",""),"sport_key":sport_key,"sport_title":sport_title,"commence_time":event.get("commence_time",""),"home":home,"away":away,"pick":pick_label(mkey,name,point),"outcome_name":name,"market":market_label(mkey),"market_key":mkey,"point":point,"odds":round(odds,3),"bookmaker":book,"consensus_prob":round(cons,5),"implied_prob":round(implied,5),"edge":round(edge,5),"is_team_market":is_team,"home_pick":is_home,"home_fav":is_home_fav,"pinnacle":round(pin,3) if pin else None,"pinnacle_ok":pin_ok,"books":int(books[key])})
-    return out
-
-def decide(c, rules, manual, approved_today=0, loss_streak=0):
-    min_odds=rules["min_odds"]; max_odds=rules["max_odds"]; min_edge=rules["min_edge_pct"]/100; elite_edge=rules["elite_edge_pct"]/100
-    if manual.get("late_chase_feeling"): return "LOCKED — EMOTIONAL RISK",0,"Locked/chase","Late/chase feeling marked. Walk away."
-    if loss_streak>=rules["lock_losses"]: return "LOCKED — EMOTIONAL RISK",0,"Locked/loss streak",f"Loss-streak lockout active: {loss_streak} losses."
-    if approved_today>=rules["max_daily"]: return "LOCKED — DAILY LIMIT",0,"Locked/daily limit",f"Daily paper-pick limit reached: {approved_today}/{rules['max_daily']}."
-    red_names=[]
-    for label,key in [("Injury/news red flag","injury_red"),("Public-heavy red flag","public_red"),("Schedule/fatigue red flag","fatigue_red"),("Line moved against pick","line_against"),("Key player uncertainty","key_player_red")]:
-        if manual.get(key): red_names.append(label)
-    if red_names and rules["reject_red_flags"]: return "REJECTED — RED FLAG",0,"Red flag","; ".join(red_names)
-    if not (min_odds<=c["odds"]<=max_odds): return "REJECTED — ODDS RANGE",0,"Odds range",f"Odds {c['odds']:.2f} outside {min_odds:.2f}-{max_odds:.2f}."
-    if c["edge"]<min_edge: return "REJECTED — EDGE TOO LOW",0,"Edge too low",f"Edge {c['edge']*100:.2f}% below minimum {min_edge*100:.2f}%."
-    if rules["apply_home_rules_to_team_markets"] and c["is_team_market"]:
-        if rules["require_home_pick"] and not c["home_pick"]: return "REJECTED — NOT HOME PICK",0,"Not home pick","Team-market pick is not the home team."
-        if rules["require_home_favourite"] and not c["home_fav"]: return "REJECTED — NOT HOME FAVOURITE",0,"Not home favourite","Team-market pick is not a home favourite."
-    if rules["require_pinnacle_value"] and not c["pinnacle_ok"]: return "WATCHLIST — PINNACLE NOT CONFIRMED",45,"Pinnacle missing","Pinnacle value not available/confirmed."
-    score=25 + (20 if c["edge"]>=elite_edge else 0) + {"h2h":15,"spreads":12,"totals":10}.get(c["market_key"],5)
-    score += (15 if c["home_pick"] else 0) if c["is_team_market"] else 10
-    score += (15 if c["home_fav"] else 0) if c["is_team_market"] else 0
-    score += 10 if c["pinnacle_ok"] else 0
-    score += min(15,c["books"]); score=min(100,score)
-    if c["edge"]>=elite_edge and score>=75: return "ELITE PAPER PICK",score,"Approved","High edge and GOAT gates passed."
-    return "APPROVED PAPER PICK",score,"Approved","Core live-data GOAT gates passed."
-
-def load_picks():
-    if "picks_df" not in st.session_state:
-        if PICKS_PATH.exists():
-            try: st.session_state.picks_df=pd.read_csv(PICKS_PATH)
-            except Exception: st.session_state.picks_df=pd.DataFrame()
-        else: st.session_state.picks_df=pd.DataFrame()
-    return st.session_state.picks_df
-
-def save_picks(df):
-    st.session_state.picks_df=df; PICKS_PATH.parent.mkdir(exist_ok=True)
-    try: df.to_csv(PICKS_PATH,index=False)
-    except Exception: pass
-
-def approved_today(df):
-    if df.empty or "created_at" not in df.columns or "decision" not in df.columns: return 0
-    today=datetime.now().date().isoformat()
-    return int((df["created_at"].astype(str).str.startswith(today) & df["decision"].astype(str).str.contains("APPROVED|ELITE|SAFE", regex=True)).sum())
-
-def current_loss_streak(df):
-    if df.empty or "result" not in df.columns: return 0
-    streak=0
-    for _,row in df.sort_values("created_at", ascending=False).iterrows():
-        res=str(row.get("result","Pending"))
-        if res=="Lost": streak+=1
-        elif res in ("Won","Push"): break
-    return streak
-
-def get_active_sports(api_key):
-    if not api_key: return FALLBACK_SPORTS
-    if "active_sports" in st.session_state: return st.session_state.active_sports
+def point_val(x: Any) -> Optional[float]:
+    if x is None:
+        return None
     try:
-        sports=fetch_sports(api_key)
-        active={s["key"]:s.get("title",s["key"]) for s in sports if s.get("active",False) and not s.get("has_outrights",False)}
+        v = float(x)
+        return v if math.isfinite(v) else None
+    except Exception:
+        return None
+
+
+def has(text: str, hints: Tuple[str, ...]) -> bool:
+    t = str(text or "").lower()
+    return any(h in t for h in hints)
+
+
+def fmt_point(p: Optional[float]) -> str:
+    if p is None:
+        return ""
+    return f"+{p:g}" if p > 0 else f"{p:g}"
+
+
+def mlabel(market: str) -> str:
+    return {"h2h": "Moneyline", "spreads": "Spread", "totals": "Total"}.get(market, market)
+
+
+def plabel(market: str, outcome: str, point: Optional[float]) -> str:
+    if market == "h2h":
+        return f"{outcome} ML"
+    if market == "spreads":
+        return f"{outcome} {fmt_point(point)}"
+    if market == "totals":
+        return f"{outcome} {point:g}" if point is not None else outcome
+    return f"{outcome} {fmt_point(point)}".strip()
+
+
+def time_window(mode: str) -> Tuple[Optional[str], Optional[str]]:
+    now_utc = datetime.now(timezone.utc)
+    if mode == "No time filter":
+        return None, None
+    if mode == "Next 24 hours":
+        return now_utc.isoformat(timespec="seconds"), (now_utc + timedelta(hours=24)).isoformat(timespec="seconds")
+    if mode == "Today NZ" and ZoneInfo is not None:
+        nz = ZoneInfo(NZ_TZ)
+        now_nz = datetime.now(nz)
+        start_nz = now_nz.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_nz = start_nz + timedelta(days=1)
+        return start_nz.astimezone(timezone.utc).isoformat(timespec="seconds"), end_nz.astimezone(timezone.utc).isoformat(timespec="seconds")
+    start = datetime(now_utc.year, now_utc.month, now_utc.day, tzinfo=timezone.utc)
+    return start.isoformat(timespec="seconds"), (start + timedelta(days=1)).isoformat(timespec="seconds")
+
+
+def fetch_sports(api_key: str) -> Dict[str, str]:
+    if not api_key:
+        return FALLBACK_SPORTS
+    if "active_sports_v3" in st.session_state:
+        return st.session_state.active_sports_v3
+    try:
+        r = requests.get(f"{ODDS_API_BASE}/sports/", params={"apiKey": api_key}, timeout=25)
+        r.raise_for_status()
+        sports = r.json()
+        active = {s["key"]: s.get("title", s["key"]) for s in sports if s.get("active", False) and not s.get("has_outrights", False)}
         if active:
-            st.session_state.active_sports=active; return active
-    except Exception as e: st.sidebar.warning(f"Could not auto-load sports: {e}")
+            st.session_state.active_sports_v3 = active
+            return active
+    except Exception as e:
+        st.sidebar.warning(f"Could not auto-load sports yet: {e}")
     return FALLBACK_SPORTS
 
-def summary(rows):
-    if not rows: return {"plain":"No candidates were generated. Try a different active sport, region, or market.","top":[],"approved":0,"watch":0,"reject":0,"locked":0,"total":0}
-    dec=[r["decision"] for r in rows]; buckets=[r["reject_bucket"] for r in rows if r["reject_bucket"]!="Approved"]
-    approved=sum(("APPROVED" in d or "ELITE" in d) for d in dec); watch=sum("WATCHLIST" in d for d in dec); reject=sum("REJECTED" in d for d in dec); locked=sum("LOCKED" in d for d in dec)
-    top=Counter(buckets).most_common(5)
-    plain=f"{approved} approved/elite paper candidate(s). Still paper-log only." if approved else "No approved paper picks. Main blockers: " + (", ".join([f"{k}: {v}" for k,v in top]) if top else "No strong edge found.")
-    return {"plain":plain,"top":top,"approved":approved,"watch":watch,"reject":reject,"locked":locked,"total":len(rows)}
 
-def ai_review_text(c, decision, reasons):
-    return f"Paper-only discipline review:\n- Pick: {c['pick']} ({c['market']}) @ {c['odds']}\n- Game: {c['away']} @ {c['home']}\n- Edge: {c['edge']*100:.2f}%\n- Decision: {decision}\n- Reasons: {reasons}\nReminder: paper tracking only. No real-money automation."
+def fetch_odds(api_key: str, sport: str, regions: str, markets: str, bookmakers: str, start: Optional[str], end: Optional[str]):
+    params = {"apiKey": api_key, "markets": markets, "oddsFormat": "decimal", "dateFormat": "iso"}
+    if bookmakers.strip():
+        params["bookmakers"] = bookmakers.strip()
+    else:
+        params["regions"] = regions
+    if start:
+        params["commenceTimeFrom"] = start
+    if end:
+        params["commenceTimeTo"] = end
+    r = requests.get(f"{ODDS_API_BASE}/sports/{sport}/odds/", params=params, timeout=35)
+    r.raise_for_status()
+    return r.json(), {"sport": sport, "used": r.headers.get("x-requests-used"), "remaining": r.headers.get("x-requests-remaining"), "fetched": datetime.now(timezone.utc).isoformat(timespec="seconds")}
 
-st.title("🐐 GOAT Shield Live v2")
-st.caption("Auto active sports + moneyline/spreads/totals + no-pick explanation. Paper-only. No sportsbook login. No real-money auto-betting.")
-api_key_default=secret("ODDS_API_KEY","")
+
+def explode_prices(events: List[Dict[str, Any]], markets: List[str]) -> List[Dict[str, Any]]:
+    rows = []
+    for ev in events:
+        home, away = ev.get("home_team", ""), ev.get("away_team", "")
+        for bm in ev.get("bookmakers", []):
+            bk = str(bm.get("key", ""))
+            bt = str(bm.get("title", bk or "unknown"))
+            for m in bm.get("markets", []):
+                mk = str(m.get("key", ""))
+                if mk not in markets:
+                    continue
+                for o in m.get("outcomes", []):
+                    price = fnum(o.get("price"), 0)
+                    if price <= 1:
+                        continue
+                    pt = point_val(o.get("point"))
+                    name = str(o.get("name", ""))
+                    rows.append({
+                        "sport_key": ev.get("sport_key", ""), "sport_title": ev.get("sport_title", ev.get("sport_key", "")),
+                        "event_id": ev.get("id", ""), "start": ev.get("commence_time", ""),
+                        "home": home, "away": away, "market": mk, "market_label": mlabel(mk),
+                        "outcome": name, "point": pt, "pick": plabel(mk, name, pt),
+                        "bookmaker_key": bk, "bookmaker": bt, "price": round(price, 3)
+                    })
+    return rows
+
+
+def key_for(r: Dict[str, Any]) -> Tuple[str, str, Optional[float]]:
+    return (r["market"], r["outcome"], r["point"])
+
+
+def consensus_probs(event_rows: List[Dict[str, Any]]) -> Dict[Tuple[str, str, Optional[float]], float]:
+    # No-vig probability per bookmaker/market/line, then averaged.
+    probs = defaultdict(list)
+    groups = defaultdict(list)
+    for r in event_rows:
+        line = r["point"] if r["market"] in ("spreads", "totals") else None
+        groups[(r["bookmaker_key"], r["market"], line)].append(r)
+    for _, g in groups.items():
+        if len(g) < 2:
+            continue
+        invs = [1 / x["price"] for x in g if x["price"] > 1]
+        s = sum(invs)
+        if s <= 0:
+            continue
+        for row, inv in zip(g, invs):
+            probs[key_for(row)].append(inv / s)
+    return {k: sum(v) / len(v) for k, v in probs.items() if v}
+
+
+def build_board(events: List[Dict[str, Any]], markets: List[str]) -> pd.DataFrame:
+    rows = explode_prices(events, markets)
+    if not rows:
+        return pd.DataFrame()
+    board_rows = []
+    by_event = defaultdict(list)
+    for r in rows:
+        by_event[r["event_id"]].append(r)
+
+    for _, ev_rows in by_event.items():
+        cprobs = consensus_probs(ev_rows)
+        groups = defaultdict(list)
+        for r in ev_rows:
+            groups[key_for(r)].append(r)
+
+        home = ev_rows[0]["home"]
+        away = ev_rows[0]["away"]
+        h2h_best = {}
+        for k, g in groups.items():
+            if k[0] == "h2h":
+                h2h_best[k[1]] = max(x["price"] for x in g)
+        home_fav_h2h = bool(h2h_best.get(home, 0) > 1 and h2h_best.get(away, 0) > 1 and h2h_best[home] < h2h_best[away])
+
+        for k, g in groups.items():
+            best = max(g, key=lambda x: x["price"])
+            avg = sum(x["price"] for x in g) / len(g)
+            pin = [x for x in g if has(x["bookmaker"], PINNACLE_HINTS) or has(x["bookmaker_key"], PINNACLE_HINTS)]
+            nzb = [x for x in g if has(x["bookmaker"], NZ_BOOK_HINTS) or has(x["bookmaker_key"], NZ_BOOK_HINTS)]
+            b365 = [x for x in g if has(x["bookmaker"], BET365_HINTS) or has(x["bookmaker_key"], BET365_HINTS)]
+            pin_best = max(pin, key=lambda x: x["price"]) if pin else None
+            nz_best = max(nzb, key=lambda x: x["price"]) if nzb else None
+            b365_best = max(b365, key=lambda x: x["price"]) if b365 else None
+            cp = cprobs.get(k, 1 / avg if avg > 1 else 0)
+            implied = 1 / best["price"]
+            edge = cp - implied
+            market, outcome, point = k
+            is_team = market in ("h2h", "spreads") and outcome in (home, away)
+            is_home = is_team and outcome == home
+            if market == "h2h":
+                is_home_fav = bool(is_home and home_fav_h2h)
+            elif market == "spreads":
+                is_home_fav = bool(is_home and point is not None and point < 0)
+            else:
+                is_home_fav = False
+            prices_text = " | ".join(f"{x['bookmaker']}: {x['price']:.2f}" for x in sorted(g, key=lambda x: x["price"], reverse=True)[:10])
+            board_rows.append({
+                "sport": best["sport_title"], "event_id": best["event_id"], "start": best["start"],
+                "game": f"{away} @ {home}", "home": home, "away": away,
+                "market": mlabel(market), "market_key": market, "pick": best["pick"], "outcome": outcome, "point": point,
+                "best_odds": round(best["price"], 3), "best_bookmaker": best["bookmaker"],
+                "avg_odds": round(avg, 3), "pinnacle": round(pin_best["price"], 3) if pin_best else None,
+                "pinnacle_book": pin_best["bookmaker"] if pin_best else "",
+                "tab_betcha": round(nz_best["price"], 3) if nz_best else None, "tab_betcha_book": nz_best["bookmaker"] if nz_best else "",
+                "bet365": round(b365_best["price"], 3) if b365_best else None, "bet365_book": b365_best["bookmaker"] if b365_best else "",
+                "consensus_prob": round(cp, 5), "implied_prob": round(implied, 5), "edge": round(edge, 5),
+                "books": len(g), "home_pick": is_home, "home_fav": is_home_fav, "is_team_market": is_team,
+                "pinnacle_ok": bool(pin_best and best["price"] >= pin_best["price"]), "all_prices": prices_text
+            })
+    return pd.DataFrame(board_rows)
+
+
+def decide(row: pd.Series, rules: Dict[str, Any], flags: Dict[str, bool], approved_count: int, loss_streak: int) -> Dict[str, Any]:
+    min_odds, max_odds = rules["min_odds"], rules["max_odds"]
+    min_edge = rules["min_edge_pct"] / 100
+    elite_edge = rules["elite_edge_pct"] / 100
+    if flags.get("late_chase_feeling"):
+        return {"decision": "LOCKED — EMOTIONAL RISK", "score": 0, "risk": "High", "reject_bucket": "Locked/chase", "reasons": "Late/chase feeling marked."}
+    if loss_streak >= rules["lock_losses"]:
+        return {"decision": "LOCKED — LOSS STREAK", "score": 0, "risk": "High", "reject_bucket": "Locked/loss streak", "reasons": f"Loss streak lockout: {loss_streak}."}
+    if approved_count >= rules["max_daily"]:
+        return {"decision": "LOCKED — DAILY LIMIT", "score": 0, "risk": "High", "reject_bucket": "Locked/daily limit", "reasons": f"Daily limit reached: {approved_count}/{rules['max_daily']}."}
+    red_flags = [name for name, val in [
+        ("Injury/news red flag", flags.get("injury_red")), ("Public-heavy red flag", flags.get("public_red")),
+        ("Schedule/fatigue red flag", flags.get("fatigue_red")), ("Line moved against pick", flags.get("line_against")),
+        ("Key player uncertainty", flags.get("key_player_red"))] if val]
+    if red_flags and rules["reject_red_flags"]:
+        return {"decision": "REJECTED — RED FLAG", "score": 0, "risk": "High", "reject_bucket": "Red flag", "reasons": "; ".join(red_flags)}
+    if not (min_odds <= row.best_odds <= max_odds):
+        return {"decision": "REJECTED — ODDS RANGE", "score": 0, "risk": "Medium", "reject_bucket": "Odds range", "reasons": f"Best odds {row.best_odds:.2f} outside {min_odds:.2f}-{max_odds:.2f}."}
+    if row.edge < min_edge:
+        return {"decision": "REJECTED — EDGE TOO LOW", "score": 0, "risk": "Medium", "reject_bucket": "Edge too low", "reasons": f"Edge {row.edge*100:.2f}% below {min_edge*100:.2f}%."}
+    if rules["apply_home_rules_to_team_markets"] and bool(row.is_team_market):
+        if rules["require_home_pick"] and not bool(row.home_pick):
+            return {"decision": "REJECTED — NOT HOME PICK", "score": 0, "risk": "Medium", "reject_bucket": "Not home pick", "reasons": "Team-market pick is not home team."}
+        if rules["require_home_favourite"] and not bool(row.home_fav):
+            return {"decision": "REJECTED — NOT HOME FAVOURITE", "score": 0, "risk": "Medium", "reject_bucket": "Not home favourite", "reasons": "Home favourite rule failed."}
+    if rules["require_pinnacle_value"] and not bool(row.pinnacle_ok):
+        return {"decision": "WATCHLIST — PINNACLE NOT CONFIRMED", "score": 45, "risk": "Medium", "reject_bucket": "Pinnacle missing", "reasons": "Pinnacle value not present/confirmed."}
+    score = 25 + (20 if row.edge >= elite_edge else 0) + min(15, int(row.books)) + (10 if row.best_odds >= row.avg_odds else 0) + (10 if bool(row.pinnacle_ok) else 0)
+    if bool(row.is_team_market):
+        score += 10 if bool(row.home_pick) else 0
+        score += 10 if bool(row.home_fav) else 0
+    else:
+        score += 10
+    score = min(100, score)
+    if row.edge >= elite_edge and score >= 75:
+        return {"decision": "ELITE PAPER PICK", "score": score, "risk": "Low/Medium", "reject_bucket": "Approved", "reasons": "Best-price edge and GOAT gates passed."}
+    return {"decision": "APPROVED PAPER PICK", "score": score, "risk": "Medium", "reject_bucket": "Approved", "reasons": "Best-price board and GOAT gates passed."}
+
+
+def load_log() -> pd.DataFrame:
+    if "paper_log_v3" not in st.session_state:
+        if PICKS_PATH.exists():
+            try: st.session_state.paper_log_v3 = pd.read_csv(PICKS_PATH)
+            except Exception: st.session_state.paper_log_v3 = pd.DataFrame()
+        else:
+            st.session_state.paper_log_v3 = pd.DataFrame()
+    return st.session_state.paper_log_v3
+
+
+def save_log(df: pd.DataFrame) -> None:
+    st.session_state.paper_log_v3 = df
+    PICKS_PATH.parent.mkdir(exist_ok=True)
+    try: df.to_csv(PICKS_PATH, index=False)
+    except Exception: pass
+
+
+def approved_today(df: pd.DataFrame) -> int:
+    if df.empty or "created_at" not in df.columns or "decision" not in df.columns: return 0
+    today = datetime.now().date().isoformat()
+    return int((df.created_at.astype(str).str.startswith(today) & df.decision.astype(str).str.contains("APPROVED|ELITE", regex=True)).sum())
+
+
+def loss_streak(df: pd.DataFrame) -> int:
+    if df.empty or "result" not in df.columns: return 0
+    s = 0
+    for _, row in df.sort_values("created_at", ascending=False).iterrows():
+        if str(row.get("result")) == "Lost": s += 1
+        elif str(row.get("result")) in ("Won", "Push"): break
+    return s
+
+
+def summarize(scan: pd.DataFrame) -> str:
+    if scan.empty: return "No candidates generated."
+    approved = scan.decision.astype(str).str.contains("APPROVED|ELITE", regex=True).sum()
+    if approved: return f"{approved} approved/elite paper candidate(s). Paper-log only."
+    top = Counter(scan.reject_bucket[scan.reject_bucket != "Approved"]).most_common(5)
+    return "No approved paper picks. Main blockers: " + ", ".join(f"{k}: {v}" for k, v in top)
+
+
+# ==========================================================
+# APP UI
+# ==========================================================
+
+st.set_page_config(page_title="GOAT Shield Live v3", page_icon="🐐", layout="wide", initial_sidebar_state="expanded")
+st.title("🐐 GOAT Shield Live v3")
+st.caption("Best Price Board + active sports + moneyline/spreads/totals + no-pick explanation. Paper-only. No sportsbook login. No real-money auto-betting.")
+
+api_secret = secret("ODDS_API_KEY", "")
 with st.sidebar:
     st.markdown("### 🔌 Connection status")
-    st.write("Odds API:", "✅ key found" if api_key_default else "Paste key below / Secrets")
-    st.write("AI review:", "Optional/off")
+    st.write("Odds API:", "✅ key found" if api_secret else "Paste key below / Secrets")
     st.caption("No sportsbook login. No auto-betting.")
-    st.markdown("### Data source")
-    api_key=st.text_input("The Odds API key", value=api_key_default, type="password")
+    api_key = st.text_input("The Odds API key", value=api_secret, type="password")
     if st.button("Reload active sports list"):
-        st.session_state.pop("active_sports",None); st.rerun()
-    sports_map=get_active_sports(api_key)
-    sport_key=st.selectbox("Active sport", list(sports_map.keys()), format_func=lambda k:sports_map.get(k,k))
-    markets=st.multiselect("Markets", ["h2h","spreads","totals"], default=["h2h"], format_func=lambda x:{"h2h":"Moneyline / h2h","spreads":"Spreads","totals":"Totals"}[x])
-    regions=st.multiselect("Regions", ["us","uk","au","eu"], default=["us"])
-    st.caption(f"Estimated current-odds credits for one fetch: about {max(1,len(regions))*max(1,len(markets))}.")
-    st.markdown("### GOAT rules")
-    rules={}
-    rules["min_odds"]=st.number_input("Min decimal odds",1.01,10.0,1.40,0.01)
-    rules["max_odds"]=st.number_input("Max decimal odds",1.01,10.0,2.20,0.01)
-    rules["min_edge_pct"]=st.number_input("Min edge %",0.0,50.0,2.0,0.1)
-    rules["elite_edge_pct"]=st.number_input("Elite edge %",0.0,50.0,5.0,0.1)
-    rules["max_daily"]=st.number_input("Max approved paper picks/day",1,20,3,1)
-    rules["lock_losses"]=st.number_input("Loss-streak lockout",1,20,3,1)
-    rules["apply_home_rules_to_team_markets"]=st.checkbox("Apply home rules to team markets only", True)
-    rules["require_home_pick"]=st.checkbox("Require team-market pick to be home team", True)
-    rules["require_home_favourite"]=st.checkbox("Require home favourite for team markets", True)
-    rules["require_pinnacle_value"]=st.checkbox("Require Pinnacle value if present", False)
-    rules["reject_red_flags"]=st.checkbox("Reject any manual red flag", True)
-    st.markdown("### Manual proof/red flags")
-    manual={"sports_alerts_support":st.checkbox("Sports Alerts proof checked",False),"scp_support":st.checkbox("Sports Chat Place proof checked",False),"picks_parlays_support":st.checkbox("Picks & Parlays proof checked",False),"injury_red":st.checkbox("Injury/news red flag",False),"public_red":st.checkbox("Public-heavy red flag",False),"fatigue_red":st.checkbox("Schedule/fatigue red flag",False),"line_against":st.checkbox("Line moved against pick",False),"key_player_red":st.checkbox("Key player uncertainty",False),"late_chase_feeling":st.checkbox("Late/chase feeling",False)}
+        st.session_state.pop("active_sports_v3", None); st.rerun()
+    sports_map = fetch_sports(api_key)
+    sports = list(sports_map.keys())
+    default = "baseball_mlb" if "baseball_mlb" in sports else sports[0]
+    selected_sports = st.multiselect("Active sports to scan", sports, default=[default], format_func=lambda k: sports_map.get(k, k))
+    markets = st.multiselect("Markets", ["h2h", "spreads", "totals"], default=["h2h"], format_func=lambda x: {"h2h":"Moneyline / h2h","spreads":"Spreads","totals":"Totals"}[x])
+    regions = st.multiselect("Regions", ["us", "uk", "au", "eu"], default=["us"])
+    bookmakers = st.text_input("Optional bookmaker filter", value="", help="Example: pinnacle,draftkings. Leave blank to use region books.")
+    time_mode = st.selectbox("Time filter", ["Today NZ", "Next 24 hours", "No time filter"])
+    credits = max(1, len(selected_sports)) * max(1, len(markets)) * (1 if bookmakers.strip() else max(1, len(regions)))
+    st.caption(f"Estimated credits/fetch: about {credits}. Start small.")
 
-df=load_picks()
-tabs=st.tabs(["🔴 Live Scanner","📒 Paper Log","✅ Results","📊 Dashboard","🛡️ Backup"])
+    st.markdown("### GOAT rules")
+    rules = dict(DEFAULT_RULES)
+    rules["min_odds"] = st.number_input("Min decimal odds", 1.01, 10.0, 1.40, 0.01)
+    rules["max_odds"] = st.number_input("Max decimal odds", 1.01, 10.0, 2.20, 0.01)
+    rules["min_edge_pct"] = st.number_input("Min edge %", 0.0, 50.0, 2.0, 0.1)
+    rules["elite_edge_pct"] = st.number_input("Elite edge %", 0.0, 50.0, 5.0, 0.1)
+    rules["max_daily"] = st.number_input("Max approved paper picks/day", 1, 20, 3, 1)
+    rules["lock_losses"] = st.number_input("Loss-streak lockout", 1, 20, 3, 1)
+    rules["apply_home_rules_to_team_markets"] = st.checkbox("Apply home rules to team markets only", True)
+    rules["require_home_pick"] = st.checkbox("Require team-market pick to be home team", True)
+    rules["require_home_favourite"] = st.checkbox("Require home favourite for team markets", True)
+    rules["require_pinnacle_value"] = st.checkbox("Require Pinnacle value if present", False)
+    rules["reject_red_flags"] = st.checkbox("Reject any manual red flag", True)
+    st.markdown("### Manual proof/red flags")
+    flags = {
+        "injury_red": st.checkbox("Injury/news red flag", False),
+        "public_red": st.checkbox("Public-heavy red flag", False),
+        "fatigue_red": st.checkbox("Schedule/fatigue red flag", False),
+        "line_against": st.checkbox("Line moved against pick", False),
+        "key_player_red": st.checkbox("Key player uncertainty", False),
+        "late_chase_feeling": st.checkbox("Late/chase feeling", False),
+    }
+
+tabs = st.tabs(["🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "🛡️ Backup"])
+logdf = load_log()
+
 with tabs[0]:
-    st.subheader("🔴 Live odds scanner")
-    st.info("v2 scans active sports, moneyline/spreads/totals, then explains why there is no pick.")
-    if not api_key: st.warning("Add your The Odds API key in the sidebar or Streamlit Secrets.")
-    if st.button("Fetch live odds and scan"):
-        if not api_key or not markets or not regions: st.stop()
-        try:
-            events,meta=fetch_odds(api_key,sport_key,regions=",".join(regions),markets=",".join(markets))
-            st.session_state["last_events"]=events; st.session_state["last_meta"]=meta; st.session_state["last_sport_key"]=sport_key; st.session_state["last_markets"]=markets
-            st.success(f"Fetched {len(events)} events. Requests remaining: {meta.get('requests_remaining')}")
-        except Exception as e:
-            st.error(f"Odds fetch failed: {e}"); st.stop()
-    events=st.session_state.get("last_events",[]); meta=st.session_state.get("last_meta",{})
-    if meta: st.caption(f"Last fetch UTC: {meta.get('last_fetch_utc')} | API used: {meta.get('requests_used')} | remaining: {meta.get('requests_remaining')}")
+    st.subheader("🟢 Best Price Board")
+    st.info("Compares the same pick/market/line across bookmakers in the live odds feed. Research and paper-log only.")
+    if st.button("Fetch best prices and GOAT scan"):
+        if not api_key: st.error("Add your Odds API key first."); st.stop()
+        if not selected_sports: st.error("Choose at least one sport."); st.stop()
+        if not markets: st.error("Choose at least one market."); st.stop()
+        start, end = time_window(time_mode)
+        all_events, metas, errors = [], [], []
+        with st.spinner("Fetching odds..."):
+            for s in selected_sports:
+                try:
+                    ev, meta = fetch_odds(api_key, s, ",".join(regions), ",".join(markets), bookmakers, start, end)
+                    all_events.extend(ev); metas.append(meta)
+                except Exception as e:
+                    errors.append(f"{sports_map.get(s, s)}: {e}")
+        for e in errors: st.error(e)
+        if metas: st.success(f"Fetched {len(all_events)} events. Used: {metas[-1].get('used')} | Remaining: {metas[-1].get('remaining')}")
+        st.session_state.v3_events = all_events
+        st.session_state.v3_markets = markets
+
+    events = st.session_state.get("v3_events", [])
+    scan_markets = st.session_state.get("v3_markets", markets)
     if events:
-        candidates=scan_events(events, st.session_state.get("last_sport_key",sport_key), st.session_state.get("last_markets",markets))
-        rows=[]; loss=current_loss_streak(df); approved=approved_today(df)
-        for c in candidates:
-            decision,score,bucket,reasons=decide(c,rules,manual,approved,loss)
-            row={**c,"decision":decision,"score":score,"reject_bucket":bucket,"reasons":reasons}
-            rows.append(row)
-        summ=summary(rows)
-        c1,c2,c3,c4=st.columns(4); c1.metric("Candidates scanned",summ["total"]); c2.metric("Approved/Elite",summ["approved"]); c3.metric("Watchlist",summ["watch"]); c4.metric("Rejected/Locked",summ["reject"]+summ["locked"])
-        if summ["approved"]==0:
-            st.warning(summ["plain"])
-            if summ["top"]:
-                st.write("Main no-pick reasons:")
-                for reason,count in summ["top"]: st.write(f"- {reason}: {count}")
-        else: st.success(summ["plain"])
-        table=pd.DataFrame(rows)
-        if table.empty: st.warning("No market candidates found. Try another active sport, region, or market.")
+        board = build_board(events, scan_markets)
+        if board.empty:
+            st.warning("No price candidates found. Try a different sport, market, time filter, or region.")
         else:
-            table["sort"]=table["decision"].map({"ELITE PAPER PICK":0,"APPROVED PAPER PICK":1,"WATCHLIST — PINNACLE NOT CONFIRMED":2}).fillna(9)
-            table=table.sort_values(["sort","edge"],ascending=[True,False]).reset_index(drop=True)
-            cols=["decision","score","market","pick","odds","bookmaker","edge","home","away","home_pick","home_fav","pinnacle","pinnacle_ok","books","reasons"]
-            st.dataframe(table[cols].style.format({"edge":"{:.2%}"}), use_container_width=True, hide_index=True)
-            approved_rows=table[table["decision"].str.contains("APPROVED|ELITE", regex=True, na=False)]
-            if not approved_rows.empty:
-                labels=approved_rows.apply(lambda r:f"{r.name}: {r['decision']} — {r['pick']} @ {r['odds']} ({r['bookmaker']})",axis=1).tolist()
-                selected=st.selectbox("Approved/elite candidate to inspect",labels); idx=int(selected.split(":")[0]); row=table.loc[idx]
-                review=ai_review_text(row,row["decision"],row["reasons"]); st.text_area("AI / discipline review",review,height=220)
-                if st.button("Auto-log this as PAPER pick"):
-                    new={"created_at":datetime.now(timezone.utc).isoformat(timespec="seconds"),"sport":row["sport_key"],"commence_time":row["commence_time"],"home_team":row["home"],"away_team":row["away"],"pick_label":row["pick"],"market":row["market_key"],"odds":row["odds"],"bookmaker":row["bookmaker"],"edge":row["edge"],"decision":row["decision"],"score":row["score"],"result":"Pending","ai_review":review}
-                    save_picks(pd.concat([pd.DataFrame([new]),df],ignore_index=True)); st.success("Logged as paper pick only."); st.rerun()
-            else: st.info("No approved paper picks in this scan. That is okay. No edge = no paper pick.")
-    elif meta: st.warning("Fetched 0 events. Try another active sport, market, or region.")
+            decs = []
+            ap = approved_today(logdf); ls = loss_streak(logdf)
+            for _, r in board.iterrows(): decs.append(decide(r, rules, flags, ap, ls))
+            decdf = pd.DataFrame(decs)
+            scan = pd.concat([board.reset_index(drop=True), decdf], axis=1)
+            scan["sort_decision"] = scan["decision"].map({"ELITE PAPER PICK":0, "APPROVED PAPER PICK":1, "WATCHLIST — PINNACLE NOT CONFIRMED":2}).fillna(9)
+            scan = scan.sort_values(["sort_decision", "edge", "best_odds"], ascending=[True, False, False]).reset_index(drop=True)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Candidates", len(scan)); c2.metric("Approved/Elite", int(scan.decision.astype(str).str.contains("APPROVED|ELITE", regex=True).sum()))
+            c3.metric("Watchlist", int(scan.decision.astype(str).str.contains("WATCHLIST").sum()))
+            c4.metric("Rejected/Locked", int(scan.decision.astype(str).str.contains("REJECTED|LOCKED", regex=True).sum()))
+            if scan.decision.astype(str).str.contains("APPROVED|ELITE", regex=True).sum(): st.success(summarize(scan))
+            else: st.warning(summarize(scan))
+            if "reject_bucket" in scan.columns:
+                top = Counter(scan.reject_bucket[scan.reject_bucket != "Approved"]).most_common(6)
+                if top:
+                    st.write("Main no-pick reasons:")
+                    for k, v in top: st.write(f"- {k}: {v}")
+            cols = ["decision","score","sport","game","market","pick","best_odds","best_bookmaker","avg_odds","pinnacle","tab_betcha","bet365","edge","books","reasons","all_prices"]
+            st.dataframe(scan[cols].style.format({"edge":"{:.2%}","best_odds":"{:.2f}","avg_odds":"{:.2f}"}), use_container_width=True, hide_index=True)
+            st.subheader("👀 Closest missed picks")
+            misses = scan[~scan.decision.astype(str).str.contains("APPROVED|ELITE", regex=True)].sort_values(["edge","score"], ascending=[False, False]).head(5)
+            if len(misses): st.dataframe(misses[["decision","market","pick","best_odds","best_bookmaker","edge","reasons","all_prices"]].style.format({"edge":"{:.2%}"}), use_container_width=True, hide_index=True)
+            else: st.info("No close misses to show.")
+            approved = scan[scan.decision.astype(str).str.contains("APPROVED|ELITE", regex=True)]
+            if len(approved):
+                labels = approved.apply(lambda r: f"{r.name}: {r.decision} — {r.pick} @ {r.best_odds} ({r.best_bookmaker})", axis=1).tolist()
+                sel = st.selectbox("Approved/elite candidate", labels)
+                idx = int(sel.split(":")[0])
+                if st.button("Log this as PAPER pick"):
+                    r = scan.loc[idx]
+                    new = {"created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "sport": r.sport, "game": r.game, "market": r.market, "pick_label": r.pick, "best_odds": r.best_odds, "best_bookmaker": r.best_bookmaker, "edge": r.edge, "decision": r.decision, "score": r.score, "result":"Pending", "closing_odds":"", "profit_units":"", "clv":"", "all_prices": r.all_prices}
+                    save_log(pd.concat([pd.DataFrame([new]), logdf], ignore_index=True)); st.success("Logged as paper pick only."); st.rerun()
+
 with tabs[1]:
-    st.subheader("📒 Paper Log"); df=load_picks()
-    if df.empty: st.info("No paper picks yet.")
-    else: st.dataframe(df,use_container_width=True); st.download_button("Download paper log CSV",df.to_csv(index=False).encode("utf-8"),"goat_shield_paper_log.csv","text/csv")
-with tabs[2]:
-    st.subheader("✅ Update Results"); df=load_picks()
-    if df.empty: st.info("No picks yet.")
-    else: st.dataframe(df,use_container_width=True)
-with tabs[3]:
-    st.subheader("📊 Paper Proof Dashboard")
-    df=load_picks()
+    st.subheader("📒 Paper Log")
+    df = load_log()
     if df.empty: st.info("No paper picks logged yet.")
-    else: st.dataframe(df,use_container_width=True)
+    else:
+        st.dataframe(df, use_container_width=True)
+        st.download_button("Download paper log CSV", df.to_csv(index=False).encode("utf-8"), "goat_shield_paper_log.csv", "text/csv")
+
+with tabs[2]:
+    st.subheader("✅ Update Results")
+    df = load_log()
+    if df.empty or "result" not in df.columns: st.info("No pending picks yet.")
+    else:
+        pending = df[df.result.astype(str).eq("Pending")]
+        if pending.empty: st.info("No pending paper picks.")
+        else:
+            labels = pending.apply(lambda r: f"{r.name}: {r.get('pick_label','Pick')} @ {r.get('best_odds','')}", axis=1).tolist()
+            choice = st.selectbox("Select pending pick", labels); idx = int(choice.split(":")[0])
+            result = st.selectbox("Result", ["Won","Lost","Push"])
+            closing = st.number_input("Closing odds if known", min_value=0.0, value=0.0, step=0.01)
+            if st.button("Save result"):
+                odds = fnum(df.loc[idx].get("best_odds", 0), 0)
+                profit = odds - 1 if result == "Won" else (-1 if result == "Lost" else 0)
+                df.loc[idx, "result"] = result; df.loc[idx, "profit_units"] = profit
+                if closing > 0: df.loc[idx, "closing_odds"] = closing; df.loc[idx, "clv"] = (odds - closing) / closing
+                save_log(df); st.success("Result updated."); st.rerun()
+
+with tabs[3]:
+    st.subheader("📊 Dashboard")
+    df = load_log()
+    if df.empty: st.info("No paper picks logged yet.")
+    else:
+        settled = df[df.result.isin(["Won","Lost","Push"])] if "result" in df.columns else pd.DataFrame()
+        pending = df[df.result.astype(str).eq("Pending")] if "result" in df.columns else pd.DataFrame()
+        profit = pd.to_numeric(settled.get("profit_units", pd.Series(dtype=float)), errors="coerce").fillna(0).sum() if not settled.empty else 0
+        roi = profit / max(len(settled), 1); clv = pd.to_numeric(settled.get("clv", pd.Series(dtype=float)), errors="coerce").dropna() if not settled.empty else pd.Series(dtype=float)
+        x1,x2,x3,x4 = st.columns(4); x1.metric("Settled", len(settled)); x2.metric("Pending", len(pending)); x3.metric("Profit units", f"{profit:+.2f}u"); x4.metric("ROI", f"{roi*100:.1f}%")
+        st.progress(min(1, len(settled)/300), text=f"Proof progress: {len(settled)}/300 settled paper picks")
+        st.metric("Positive CLV", f"{((clv>0).mean()*100 if len(clv) else 0):.1f}%")
+        st.warning("System verdict: NOT PROVEN — keep paper testing." if len(settled) < 300 else "Check ROI and CLV before any serious decision.")
+
 with tabs[4]:
-    st.subheader("🛡️ Backup / restore")
-    df=load_picks()
-    if not df.empty: st.download_button("Download backup CSV",df.to_csv(index=False).encode("utf-8"),"goat_shield_backup.csv","text/csv")
+    st.subheader("🛡️ Backup / Restore")
+    df = load_log()
+    if not df.empty: st.download_button("Download backup CSV", df.to_csv(index=False).encode("utf-8"), "goat_shield_backup.csv", "text/csv")
+    up = st.file_uploader("Restore CSV backup", type=["csv"])
+    if up is not None:
+        try:
+            new_df = pd.read_csv(up)
+            if st.button("Restore this CSV"):
+                save_log(new_df); st.success("Restored."); st.rerun()
+        except Exception as e: st.error(f"Restore failed: {e}")
     if st.button("Delete all local paper picks"):
-        save_picks(pd.DataFrame()); st.success("Deleted local paper log."); st.rerun()
-st.divider(); st.caption("GOAT Shield Live v2 is a paper-betting proof system only. It does not place real-money bets, log into sportsbooks, or bypass any betting rules.")
+        save_log(pd.DataFrame()); st.success("Deleted local paper log."); st.rerun()
+
+st.divider()
+st.caption("GOAT Shield Live v3 is a paper-betting proof system only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")

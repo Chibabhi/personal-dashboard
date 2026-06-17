@@ -1,2 +1,2 @@
-# GOAT Shield v2 hotfix
-# Engine is now inside app.py to avoid import mismatch errors on Streamlit Cloud.
+"""GOAT Shield v3 placeholder. App is self-contained in app.py for Streamlit reliability."""
+VERSION = "v3"
