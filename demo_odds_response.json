@@ -1,0 +1,49 @@
+[
+  {
+    "id": "demo_event_1",
+    "sport_key": "baseball_mlb",
+    "commence_time": "2026-06-16T23:00:00Z",
+    "home_team": "Yankees",
+    "away_team": "Red Sox",
+    "bookmakers": [
+      {
+        "key": "pinnacle",
+        "title": "Pinnacle",
+        "markets": [
+          {
+            "key": "h2h",
+            "outcomes": [
+              {
+                "name": "Yankees",
+                "price": 1.78
+              },
+              {
+                "name": "Red Sox",
+                "price": 2.1
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "key": "samplebook",
+        "title": "SampleBook",
+        "markets": [
+          {
+            "key": "h2h",
+            "outcomes": [
+              {
+                "name": "Yankees",
+                "price": 1.83
+              },
+              {
+                "name": "Red Sox",
+                "price": 2.05
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]
