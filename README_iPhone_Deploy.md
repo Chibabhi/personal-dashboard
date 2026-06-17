@@ -1,6 +1,6 @@
-# iPhone upgrade guide — GOAT Shield Live v3
+# iPhone install guide — v3.1 hotfix
 
-Upload and replace these files in GitHub:
+Upload/replace these files in GitHub:
 
 - app.py
 - goat_engine_live.py
@@ -8,25 +8,21 @@ Upload and replace these files in GitHub:
 - README.md
 - README_iPhone_Deploy.md
 
-Then commit changes.
+Then:
+1. Commit changes.
+2. Streamlit > Manage app > Reboot app.
+3. Open app.
+4. You should see: GOAT Shield Live v3.1
 
-Open Streamlit > Manage app > Reboot app.
-
-First v3 test:
-- Sport: MLB only first
-- Markets: h2h only first
-- Region: us only
-- Time filter: Today NZ or Next 24 hours
+First test:
+- Active sports: MLB only
+- Markets: h2h only
+- Regions: us only
+- Time filter: Today NZ
 - Min odds: 1.40
 - Max odds: 2.20
 - Min edge: 2.00
-- Elite edge: 5.00
-- Max paper picks/day: 3
-- Loss-streak lockout: 3
 - Require home team: ON
 - Require home favourite: ON
-- Require Pinnacle: OFF for now
-- All red flags: OFF unless genuinely true
-
-Then test h2h + spreads, then h2h + spreads + totals.
-More sports/markets/regions use more credits.
+- Pinnacle required: OFF
+- Red flags: OFF unless true

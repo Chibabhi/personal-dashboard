@@ -1,2 +1,2 @@
-"""GOAT Shield v3 placeholder. App is self-contained in app.py for Streamlit reliability."""
-VERSION = "v3"
+"""GOAT Shield Live v3.1 placeholder. Engine is embedded in app.py."""
+VERSION = "v3.1"
