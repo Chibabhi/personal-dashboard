@@ -1,24 +1,24 @@
-# GOAT Shield Live v1
+# GOAT Shield Live v2
 
 Phone-friendly real-time odds scanner + AI discipline review + paper log.
 
-## What it does
-- Pulls live/upcoming moneyline odds from The Odds API.
-- Calculates implied probability and consensus no-vig market probability.
-- Calculates edge against best available odds.
-- Applies GOAT rules: odds range, edge, home pick, home favourite, optional Pinnacle value, manual red flags, daily limit, loss-streak lockout.
-- Optionally uses OpenAI for a short discipline review.
-- Logs approved picks as PAPER picks only.
+## v2 upgrades
+- Auto-loads active sports from The Odds API.
+- Adds market selection: h2h/moneyline, spreads, totals.
+- Adds no-pick explanation with main blockers.
+- Keeps paper-only safety.
 
-## What it does not do
+## What this app does NOT do
 - No real-money betting.
 - No auto-login to TAB / Bet365 / Pinnacle.
 - No sportsbook scraping.
 - No bank/card details.
 - No bypassing sportsbook rules.
 
-## Run locally
-```bash
-pip install -r requirements.txt
-streamlit run app.py
+## Streamlit Secrets
+
+```toml
+ODDS_API_KEY = "your_real_key_here"
+OPENAI_API_KEY = ""
+OPENAI_MODEL = "gpt-4.1-mini"
 ```

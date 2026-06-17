@@ -1,28 +1,42 @@
-# iPhone deployment guide — GOAT Shield Live v1
+# iPhone upgrade guide — GOAT Shield Live v2
 
-This app needs cloud hosting because API keys must be hidden on a backend.
+You already have v1 deployed.
 
-## Best simple path: Streamlit Community Cloud
+## Upgrade steps
 
-1. Create/sign into GitHub and Streamlit Community Cloud.
-2. Create a GitHub repo. Private is best.
-3. Upload: `app.py`, `goat_engine_live.py`, `requirements.txt`, `README.md`.
-4. In Streamlit Cloud, create New app and choose `app.py` as the main file.
-5. In App Settings > Secrets, add:
+1. Download this ZIP.
+2. Unzip it in Files.
+3. Go to your GitHub repo: personal-dashboard.
+4. Upload and replace these files:
+   - app.py
+   - goat_engine_live.py
+   - requirements.txt
+   - README.md
+   - README_iPhone_Deploy.md
+5. Commit changes.
+6. Streamlit should rebuild automatically.
+7. If not, open Streamlit Manage app > Reboot.
 
-```toml
-ODDS_API_KEY = "your_odds_api_key"
-OPENAI_API_KEY = ""
-OPENAI_MODEL = "gpt-4.1-mini"
-```
+## First v2 test settings
 
-6. Open the app link in Safari. Share button > Add to Home Screen.
+- Active sport: MLB or any active sport shown
+- Markets: h2h only first
+- Region: us only first
+- Min odds: 1.40
+- Max odds: 2.20
+- Min edge: 2.00
+- Elite edge: 5.00
+- Max paper picks/day: 3
+- Loss-streak lockout: 3
+- Apply home rules to team markets only: ON
+- Require home pick: ON
+- Require home favourite: ON
+- Require Pinnacle value: OFF for now
+- Reject any manual red flag: ON
+- All red flags: OFF unless genuinely true
 
-## Daily use
-1. Choose sport.
-2. Fetch live odds and scan.
-3. Log only approved PAPER picks.
-4. After games, update Won/Lost/Push.
-5. Judge the system only after 300+ settled paper picks.
+Then try:
+- h2h + spreads
+- h2h + spreads + totals
 
-No real-money automation.
+More markets/regions = more API credits.
