@@ -1,4 +1,4 @@
-# iPhone install guide — v3.3 NZ Bettor Mode
+# iPhone install guide — v3.4 Mobile Cards
 
 Upload/replace these files in GitHub:
 
@@ -12,14 +12,14 @@ Then:
 1. Commit changes.
 2. Streamlit > Manage app > Reboot app.
 3. Open app.
-4. You should see: GOAT Shield Live v3.3
+4. You should see: GOAT Shield Live v3.4
 
 Best first settings:
 - Active sports: MLB only
 - Markets: Moneyline / h2h only
 - Regions: us only
 - Time filter: NZ Bettor Mode: Next 24 hours
-- Minimum minutes before start: 60
+- Lock if game starts within minutes: 90
 - Min odds: 1.40
 - Max odds: 2.20
 - Min edge: 2.00
@@ -28,6 +28,8 @@ Best first settings:
 - Require Pinnacle value: OFF
 - Red flags: OFF unless genuinely true
 
-Then test:
-- h2h + spreads
-- h2h + spreads + totals
+How to use:
+1. Go to 🇳🇿 NZ Bettor Board.
+2. Press Fetch NZ bettor board.
+3. Open 📱 Mobile Cards.
+4. Use Closest missed only or Approved / Elite only.

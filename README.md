@@ -1,29 +1,19 @@
-# GOAT Shield Live v3.3 — NZ Bettor Mode
+# GOAT Shield Live v3.4 — Mobile Card View
 
-Best Price Board + NZ/US time handling + active sports + moneyline/spreads/totals + no-pick explanation.
+NZ Bettor Mode + Best Price Board + iPhone-friendly mobile cards.
 
-## v3.3 upgrade
+## v3.4 upgrades
 
-Adds NZ Bettor Mode for Abhi:
-
-- Shows start time in NZ.
-- Shows US Eastern start time.
-- Shows US game date.
-- Shows NZ betting date.
-- Shows starts-in time.
-- Locks games that have already started.
-- Locks games starting too soon.
-- Adds safer time filters:
-  - NZ Bettor Mode: Next 24 hours
-  - NZ Bettor Mode: Next 36 hours
-  - Today NZ
-  - Today US Eastern
-  - Tomorrow US Eastern
-  - No time filter
+- Adds 📱 Mobile Cards tab.
+- Shows closest missed picks as clean iPhone cards.
+- Shows approved/elite picks as clean iPhone cards.
+- No sideways scrolling needed for key details.
+- Default time safety lock increased to 90 minutes.
+- Time lock now triggers at ≤ lock minutes, not just under it.
+- Keeps NZ time and US Eastern time side by side.
+- Keeps paper-only safety.
 
 ## Safety
-
-Paper-only proof system.
 
 This app does not:
 - place real-money bets

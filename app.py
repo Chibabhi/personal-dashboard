@@ -34,7 +34,7 @@ DEFAULT_RULES = {
     "elite_edge_pct": 5.0,
     "max_daily": 3,
     "lock_losses": 3,
-    "min_minutes_before_start": 60,
+    "min_minutes_before_start": 90,
     "require_home_pick": True,
     "require_home_favourite": True,
     "require_pinnacle_value": False,
@@ -61,7 +61,7 @@ BET365_HINTS = ("bet365",)
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v3.3",
+    page_title="GOAT Shield Live v3.4",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -193,8 +193,8 @@ def game_time_status(dt: Optional[datetime], min_minutes: int) -> Tuple[str, boo
     diff_min = (dt - now).total_seconds() / 60
     if diff_min < 0:
         return "Started / locked", True
-    if diff_min < min_minutes:
-        return f"Too close / locked (<{min_minutes}m)", True
+    if diff_min <= min_minutes:
+        return f"Too close / locked (≤{min_minutes}m)", True
     return "Upcoming", False
 
 
@@ -527,6 +527,101 @@ def decide(c: Dict[str, Any], rules: Dict[str, Any], flags: Dict[str, bool], app
     return "APPROVED PAPER PICK", score, "Approved", "Best-price board and GOAT gates passed"
 
 
+
+
+# =========================================================
+# MOBILE CARD VIEW HELPERS — v3.4
+# =========================================================
+def short_prices(all_prices: str, max_books: int = 4) -> str:
+    parts = [p.strip() for p in str(all_prices or "").split("|") if p.strip()]
+    if not parts:
+        return "No bookmaker prices shown"
+    shown = parts[:max_books]
+    extra = len(parts) - len(shown)
+    text = " • ".join(shown)
+    if extra > 0:
+        text += f" • +{extra} more"
+    return text
+
+
+def edge_badge(edge: float) -> str:
+    try:
+        e = float(edge) * 100
+    except Exception:
+        e = 0.0
+    if e >= 5:
+        return f"🔥 Elite edge {e:.2f}%"
+    if e >= 2:
+        return f"✅ Edge {e:.2f}%"
+    if e >= 0:
+        return f"🟡 Near but low edge {e:.2f}%"
+    return f"🔴 Negative edge {e:.2f}%"
+
+
+def render_candidate_card(row: dict, idx: int):
+    decision = str(row.get("decision", ""))
+    pick = str(row.get("pick", ""))
+    game = str(row.get("game", ""))
+    market = str(row.get("market_label", row.get("market", "")))
+    best_odds = row.get("best_odds", "")
+    best_book = str(row.get("best_bookmaker", ""))
+    avg_odds = row.get("avg_odds", "")
+    edge = safe_float(row.get("edge", 0), 0)
+    reasons = str(row.get("reasons", ""))
+    status = str(row.get("time_status", ""))
+    starts_in = str(row.get("starts_in", ""))
+    start_nz = str(row.get("start_nz", ""))
+    start_et = str(row.get("start_et", ""))
+    us_date = str(row.get("us_et_date", ""))
+    nz_date = str(row.get("nz_date", ""))
+    prices = short_prices(str(row.get("all_prices", "")), max_books=5)
+
+    if "ELITE" in decision:
+        top_line = "🔥 ELITE PAPER CANDIDATE"
+    elif "APPROVED" in decision:
+        top_line = "✅ APPROVED PAPER CANDIDATE"
+    elif "WATCHLIST" in decision:
+        top_line = "👀 WATCHLIST"
+    elif "LOCKED" in decision:
+        top_line = "🔒 LOCKED"
+    else:
+        top_line = "❌ REJECTED"
+
+    with st.container(border=True):
+        st.markdown(f"### {idx}. {top_line}")
+        st.markdown(f"**{market}: {pick}**")
+        st.write(game)
+
+        c1, c2 = st.columns(2)
+        c1.metric("Best odds", f"{safe_float(best_odds, 0):.2f}" if best_odds != "" else "-")
+        c2.metric("Edge", f"{edge*100:.2f}%")
+
+        st.markdown(f"**Best bookmaker:** {best_book}")
+        st.markdown(f"**Average odds:** {safe_float(avg_odds, 0):.2f}" if avg_odds != "" else "**Average odds:** -")
+        st.markdown(f"**Time:** {status} • starts in **{starts_in}**")
+        st.markdown(f"**NZ:** {start_nz}")
+        st.markdown(f"**US ET:** {start_et}")
+        st.caption(f"NZ betting date: {nz_date} | US game date: {us_date}")
+        st.info(f"{edge_badge(edge)} — {reasons}")
+        st.caption(f"Prices: {prices}")
+
+
+def mobile_card_dataframe(board: pd.DataFrame, mode: str, max_cards: int) -> pd.DataFrame:
+    if board.empty:
+        return board
+
+    df = board.copy()
+    if mode == "Approved / Elite only":
+        df = df[df["decision"].astype(str).str.contains("APPROVED|ELITE", regex=True, na=False)]
+        return df.sort_values(["edge", "score"], ascending=[False, False]).head(max_cards)
+    if mode == "Closest missed only":
+        df = df[~df["decision"].astype(str).str.contains("APPROVED|ELITE", regex=True, na=False)]
+        return df.sort_values(["edge", "score"], ascending=[False, False]).head(max_cards)
+    if mode == "Upcoming only":
+        df = df[df["time_status"].astype(str).eq("Upcoming")]
+        return df.sort_values(["sort", "edge", "best_odds"], ascending=[True, False, False]).head(max_cards)
+    return df.sort_values(["sort", "time_locked", "edge", "best_odds"], ascending=[True, True, False, False]).head(max_cards)
+
 # =========================================================
 # PAPER LOG
 # =========================================================
@@ -577,8 +672,8 @@ def loss_streak_count(df):
 # UI
 # =========================================================
 def main():
-    st.title("🐐 GOAT Shield Live v3.3")
-    st.caption("NZ Bettor Mode + Best Price Board + US sports time conversion. Paper-only. No sportsbook login. No real-money auto-betting.")
+    st.title("🐐 GOAT Shield Live v3.4")
+    st.caption("NZ Bettor Mode + mobile card view + Best Price Board + US sports time conversion. Paper-only. No sportsbook login. No real-money auto-betting.")
 
     api_key_default = secret("ODDS_API_KEY", "")
 
@@ -661,7 +756,7 @@ def main():
 
     log_df = load_log()
 
-    tabs = st.tabs(["🇳🇿 NZ Bettor Board", "🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "🛡️ Backup"])
+    tabs = st.tabs(["🇳🇿 NZ Bettor Board", "📱 Mobile Cards", "🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "🛡️ Backup"])
 
     with tabs[0]:
         st.subheader("🇳🇿 NZ Bettor Board")
@@ -758,6 +853,9 @@ def main():
                     hide_index=True,
                 )
 
+                st.subheader("📱 Mobile-friendly view")
+                st.caption("For clean iPhone reading, open the 📱 Mobile Cards tab after this scan.")
+
                 st.subheader("👀 Closest missed picks")
                 missed = board[~board["decision"].astype(str).str.contains("APPROVED|ELITE", regex=True, na=False)].sort_values(["edge", "score"], ascending=[False, False]).head(5)
                 if missed.empty:
@@ -808,11 +906,42 @@ def main():
                         st.rerun()
 
     with tabs[1]:
+        st.subheader("📱 Mobile Cards")
+        st.write("Clean iPhone view for the same scan. No sideways scrolling needed.")
+        events_cards = st.session_state.get("events_v33", [])
+        last_markets_cards = st.session_state.get("markets_v33", markets)
+        if not events_cards:
+            st.info("Run Fetch NZ bettor board first, then come here.")
+        else:
+            candidates_cards = build_candidates(events_cards, last_markets_cards, int(rules["min_minutes_before_start"]))
+            rows_cards = []
+            app_count_cards = approved_today_count(log_df)
+            streak_cards = loss_streak_count(log_df)
+            for cand in candidates_cards:
+                decision, score, bucket, reason = decide(cand, rules, flags, app_count_cards, streak_cards)
+                rr = dict(cand)
+                rr.update({"decision": decision, "score": score, "reject_bucket": bucket, "reasons": reason})
+                rows_cards.append(rr)
+            if not rows_cards:
+                st.warning("No card candidates found.")
+            else:
+                cards_df = pd.DataFrame(rows_cards)
+                cards_df["sort"] = cards_df["decision"].map({"ELITE PAPER PICK": 0, "APPROVED PAPER PICK": 1, "WATCHLIST — PINNACLE NOT CONFIRMED": 2}).fillna(9)
+                c_mode = st.selectbox("Card view", ["Closest missed only", "Approved / Elite only", "Upcoming only", "All ranked"], index=0)
+                c_max = st.slider("Number of cards", 3, 15, 5)
+                picked_cards = mobile_card_dataframe(cards_df, c_mode, c_max)
+                if picked_cards.empty:
+                    st.info("No cards match this filter.")
+                else:
+                    for n, (_, card_row) in enumerate(picked_cards.iterrows(), start=1):
+                        render_candidate_card(card_row.to_dict(), n)
+
+    with tabs[2]:
         st.subheader("🟢 Best Price Board")
         st.write("Use the NZ Bettor Board first. It includes all best-price board columns plus NZ/US time conversion.")
         st.caption("v3.3 keeps this tab as a simple explanation so the phone UI stays cleaner.")
 
-    with tabs[2]:
+    with tabs[3]:
         st.subheader("📒 Paper Log")
         df = load_log()
         if df.empty:
@@ -821,7 +950,7 @@ def main():
             st.dataframe(df, use_container_width=True)
             st.download_button("Download CSV", df.to_csv(index=False).encode("utf-8"), "goat_shield_paper_log.csv", "text/csv")
 
-    with tabs[3]:
+    with tabs[4]:
         st.subheader("✅ Results")
         df = load_log()
         if df.empty or "result" not in df.columns:
@@ -847,7 +976,7 @@ def main():
                     st.success("Saved.")
                     st.rerun()
 
-    with tabs[4]:
+    with tabs[5]:
         st.subheader("📊 Dashboard")
         df = load_log()
         if df.empty:
@@ -873,7 +1002,7 @@ def main():
                 st.subheader("Performance by market")
                 st.dataframe(df.groupby("market", dropna=False).size().reset_index(name="paper_picks"), use_container_width=True)
 
-    with tabs[5]:
+    with tabs[6]:
         st.subheader("🛡️ Backup")
         df = load_log()
         if not df.empty:
@@ -890,7 +1019,7 @@ def main():
                 st.error(f"Restore failed: {e}")
 
     st.divider()
-    st.caption("GOAT Shield Live v3.3 is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v3.4 is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":
