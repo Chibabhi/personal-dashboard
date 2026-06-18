@@ -17,9 +17,15 @@ try:
 except Exception:
     ZoneInfo = None
 
+
+# =========================================================
+# CONFIG
+# =========================================================
 ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 PICKS_PATH = Path("data/paper_picks.csv")
-NZ_TZ = "Pacific/Auckland"
+
+NZ_TZ_NAME = "Pacific/Auckland"
+ET_TZ_NAME = "America/New_York"
 
 DEFAULT_RULES = {
     "min_odds": 1.40,
@@ -28,6 +34,7 @@ DEFAULT_RULES = {
     "elite_edge_pct": 5.0,
     "max_daily": 3,
     "lock_losses": 3,
+    "min_minutes_before_start": 60,
     "require_home_pick": True,
     "require_home_favourite": True,
     "require_pinnacle_value": False,
@@ -49,13 +56,40 @@ PINNACLE_HINTS = ("pinnacle",)
 NZ_BOOK_HINTS = ("tab", "tab nz", "betcha", "entain")
 BET365_HINTS = ("bet365",)
 
-st.set_page_config(page_title="GOAT Shield Live v3.2", page_icon="🐐", layout="wide", initial_sidebar_state="expanded")
+
+# =========================================================
+# STREAMLIT PAGE
+# =========================================================
+st.set_page_config(
+    page_title="GOAT Shield Live v3.3",
+    page_icon="🐐",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+
+# =========================================================
+# BASIC HELPERS
+# =========================================================
+def get_tz(name: str):
+    if ZoneInfo is None:
+        return timezone.utc
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        return timezone.utc
+
+
+NZ_TZ = get_tz(NZ_TZ_NAME)
+ET_TZ = get_tz(ET_TZ_NAME)
+
 
 def secret(name: str, default: str = "") -> str:
     try:
         return st.secrets.get(name, default)
     except Exception:
         return os.environ.get(name, default)
+
 
 def safe_float(x: Any, default: float = 0.0) -> float:
     try:
@@ -66,6 +100,7 @@ def safe_float(x: Any, default: float = 0.0) -> float:
         pass
     return default
 
+
 def safe_point(x: Any) -> Optional[float]:
     if x is None:
         return None
@@ -75,17 +110,21 @@ def safe_point(x: Any) -> Optional[float]:
     except Exception:
         return None
 
+
 def has_hint(text: str, hints: Tuple[str, ...]) -> bool:
     t = str(text or "").lower()
     return any(h in t for h in hints)
 
+
 def market_label(m: str) -> str:
     return {"h2h": "Moneyline", "spreads": "Spread", "totals": "Total"}.get(m, m)
+
 
 def fmt_point(p: Optional[float]) -> str:
     if p is None:
         return ""
     return f"+{p:g}" if p > 0 else f"{p:g}"
+
 
 def make_pick_label(market: str, outcome: str, point: Optional[float]) -> str:
     if market == "h2h":
@@ -96,44 +135,136 @@ def make_pick_label(market: str, outcome: str, point: Optional[float]) -> str:
         return f"{outcome} {point:g}" if point is not None else outcome
     return f"{outcome} {fmt_point(point)}".strip()
 
+
 def iso_z(dt: datetime) -> str:
-    """The Odds API is safest with UTC Z timestamps, not +00:00 offsets."""
     return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
-def nz_time_window(mode: str):
-    now_utc = datetime.now(timezone.utc)
-    if mode == "No time filter":
-        return None, None
-    if mode == "Next 24 hours":
-        return iso_z(now_utc), iso_z(now_utc + timedelta(hours=24))
-    if ZoneInfo is not None:
-        nz = ZoneInfo(NZ_TZ)
-        now_nz = datetime.now(nz)
-        start_nz = now_nz.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_nz = start_nz + timedelta(days=1)
-        return iso_z(start_nz), iso_z(end_nz)
-    start = datetime(now_utc.year, now_utc.month, now_utc.day, tzinfo=timezone.utc)
-    return iso_z(start), iso_z(start + timedelta(days=1))
+
+def parse_api_datetime(s: Any) -> Optional[datetime]:
+    if not s:
+        return None
+    try:
+        text = str(s)
+        if text.endswith("Z"):
+            text = text.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def fmt_dt(dt: Optional[datetime], tz, label: str) -> str:
+    if dt is None:
+        return ""
+    local = dt.astimezone(tz)
+    return local.strftime("%a %d %b, %I:%M %p").lstrip("0") + f" {label}"
+
+
+def fmt_date(dt: Optional[datetime], tz) -> str:
+    if dt is None:
+        return ""
+    return dt.astimezone(tz).strftime("%Y-%m-%d")
+
+
+def starts_in_text(dt: Optional[datetime]) -> str:
+    if dt is None:
+        return ""
+    diff = dt - datetime.now(timezone.utc)
+    seconds = int(diff.total_seconds())
+    if seconds < 0:
+        return "Started"
+    mins = seconds // 60
+    if mins < 60:
+        return f"{mins} min"
+    hours = mins // 60
+    rem = mins % 60
+    if hours < 48:
+        return f"{hours}h {rem}m"
+    days = hours // 24
+    return f"{days}d {hours % 24}h"
+
+
+def game_time_status(dt: Optional[datetime], min_minutes: int) -> Tuple[str, bool]:
+    if dt is None:
+        return "Unknown time", False
+    now = datetime.now(timezone.utc)
+    diff_min = (dt - now).total_seconds() / 60
+    if diff_min < 0:
+        return "Started / locked", True
+    if diff_min < min_minutes:
+        return f"Too close / locked (<{min_minutes}m)", True
+    return "Upcoming", False
+
 
 def clean_api_error(e: Exception) -> str:
-    """Do not show the full URL because it can expose apiKey."""
     msg = str(e)
     if "401" in msg:
         return "401 Unauthorized — API key is wrong, expired, or placeholder. Rotate/copy the real key."
     if "422" in msg:
-        return "422 Unprocessable Entity — usually invalid market/sport/time-filter combination. Try Time filter = No time filter, or a different sport/market."
+        return "422 Unprocessable Entity — usually invalid market/sport/time-filter combination. Try another time filter, sport, or market."
     if "429" in msg:
         return "429 Rate limit / credit limit issue."
     if "404" in msg:
         return "404 Not found — sport/bookmaker/market not available."
     return msg.split(" for url:")[0]
 
+
+# =========================================================
+# NZ / US TIME FILTERS
+# =========================================================
+def time_window(mode: str) -> Tuple[Optional[str], Optional[str]]:
+    now_utc = datetime.now(timezone.utc)
+
+    if mode == "No time filter":
+        return None, None
+
+    if mode == "NZ Bettor Mode: Next 24 hours":
+        return iso_z(now_utc), iso_z(now_utc + timedelta(hours=24))
+
+    if mode == "NZ Bettor Mode: Next 36 hours":
+        return iso_z(now_utc), iso_z(now_utc + timedelta(hours=36))
+
+    if mode == "Today NZ":
+        now_nz = now_utc.astimezone(NZ_TZ)
+        start_nz = now_nz.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_nz = start_nz + timedelta(days=1)
+        return iso_z(start_nz), iso_z(end_nz)
+
+    if mode == "Today US Eastern":
+        now_et = now_utc.astimezone(ET_TZ)
+        start_et = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_et = start_et + timedelta(days=1)
+        return iso_z(start_et), iso_z(end_et)
+
+    if mode == "Tomorrow US Eastern":
+        now_et = now_utc.astimezone(ET_TZ)
+        start_et = now_et.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        end_et = start_et + timedelta(days=1)
+        return iso_z(start_et), iso_z(end_et)
+
+    return None, None
+
+
+# =========================================================
+# ODDS API
+# =========================================================
 def fetch_sports(api_key: str):
     r = requests.get(f"{ODDS_API_BASE}/sports/", params={"apiKey": api_key}, timeout=25)
     r.raise_for_status()
     return r.json()
 
-def fetch_odds(api_key: str, sport_key: str, regions: str, markets: str, bookmakers: str = "", start: str = None, end: str = None):
+
+def fetch_odds(
+    api_key: str,
+    sport_key: str,
+    regions: str,
+    markets: str,
+    bookmakers: str = "",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+):
     params = {
         "apiKey": api_key,
         "markets": markets,
@@ -144,6 +275,7 @@ def fetch_odds(api_key: str, sport_key: str, regions: str, markets: str, bookmak
         params["bookmakers"] = bookmakers.strip()
     else:
         params["regions"] = regions
+
     if start:
         params["commenceTimeFrom"] = start
     if end:
@@ -151,6 +283,7 @@ def fetch_odds(api_key: str, sport_key: str, regions: str, markets: str, bookmak
 
     r = requests.get(f"{ODDS_API_BASE}/sports/{sport_key}/odds/", params=params, timeout=35)
     r.raise_for_status()
+
     meta = {
         "sport": sport_key,
         "requests_remaining": r.headers.get("x-requests-remaining"),
@@ -159,11 +292,12 @@ def fetch_odds(api_key: str, sport_key: str, regions: str, markets: str, bookmak
     }
     return r.json(), meta
 
+
 def get_sports_map(api_key: str):
     if not api_key:
         return FALLBACK_SPORTS
-    if "sports_map_v32" in st.session_state:
-        return st.session_state["sports_map_v32"]
+    if "sports_map_v33" in st.session_state:
+        return st.session_state["sports_map_v33"]
     try:
         sports = fetch_sports(api_key)
         active = {
@@ -172,12 +306,16 @@ def get_sports_map(api_key: str):
             if s.get("active", False) and not s.get("has_outrights", False)
         }
         if active:
-            st.session_state["sports_map_v32"] = active
+            st.session_state["sports_map_v33"] = active
             return active
     except Exception as e:
         st.sidebar.warning(f"Could not load active sports yet: {clean_api_error(e)}")
     return FALLBACK_SPORTS
 
+
+# =========================================================
+# BEST PRICE BOARD ENGINE
+# =========================================================
 def extract_price_rows(events: List[Dict[str, Any]], selected_markets: List[str]) -> List[Dict[str, Any]]:
     rows = []
     for ev in events:
@@ -185,6 +323,9 @@ def extract_price_rows(events: List[Dict[str, Any]], selected_markets: List[str]
         away = ev.get("away_team", "") or ""
         sport_key = ev.get("sport_key", "")
         sport_title = ev.get("sport_title", sport_key)
+        start_utc_dt = parse_api_datetime(ev.get("commence_time"))
+        status, _ = game_time_status(start_utc_dt, DEFAULT_RULES["min_minutes_before_start"])
+
         for bm in ev.get("bookmakers", []):
             bm_key = str(bm.get("key", ""))
             bm_title = str(bm.get("title", bm_key or "unknown"))
@@ -203,6 +344,13 @@ def extract_price_rows(events: List[Dict[str, Any]], selected_markets: List[str]
                         "sport_title": sport_title,
                         "event_id": str(ev.get("id", "")),
                         "commence_time": str(ev.get("commence_time", "")),
+                        "start_utc_dt": start_utc_dt,
+                        "start_nz": fmt_dt(start_utc_dt, NZ_TZ, "NZ"),
+                        "start_et": fmt_dt(start_utc_dt, ET_TZ, "ET"),
+                        "nz_date": fmt_date(start_utc_dt, NZ_TZ),
+                        "us_et_date": fmt_date(start_utc_dt, ET_TZ),
+                        "starts_in": starts_in_text(start_utc_dt),
+                        "time_status": status,
                         "home": home,
                         "away": away,
                         "market": mkey,
@@ -215,6 +363,7 @@ def extract_price_rows(events: List[Dict[str, Any]], selected_markets: List[str]
                         "price": round(price, 3),
                     })
     return rows
+
 
 def no_vig_probs(event_rows: List[Dict[str, Any]]) -> Dict[Tuple[str, str, Optional[float]], float]:
     groups = defaultdict(list)
@@ -235,7 +384,8 @@ def no_vig_probs(event_rows: List[Dict[str, Any]]) -> Dict[Tuple[str, str, Optio
             probs[key].append(inv / s)
     return {k: sum(v) / len(v) for k, v in probs.items() if v}
 
-def build_candidates(events: List[Dict[str, Any]], selected_markets: List[str]) -> List[Dict[str, Any]]:
+
+def build_candidates(events: List[Dict[str, Any]], selected_markets: List[str], min_minutes_before_start: int) -> List[Dict[str, Any]]:
     rows = extract_price_rows(events, selected_markets)
     by_event = defaultdict(list)
     for r in rows:
@@ -245,9 +395,12 @@ def build_candidates(events: List[Dict[str, Any]], selected_markets: List[str]) 
     for _, ev_rows in by_event.items():
         if not ev_rows:
             continue
+
         probs = no_vig_probs(ev_rows)
         home = ev_rows[0]["home"]
         away = ev_rows[0]["away"]
+        start_dt = ev_rows[0]["start_utc_dt"]
+        status, time_locked = game_time_status(start_dt, min_minutes_before_start)
 
         by_pick = defaultdict(list)
         for r in ev_rows:
@@ -289,6 +442,13 @@ def build_candidates(events: List[Dict[str, Any]], selected_markets: List[str]) 
                 "sport_key": best["sport_key"],
                 "event_id": best["event_id"],
                 "start": best["commence_time"],
+                "start_nz": best["start_nz"],
+                "start_et": best["start_et"],
+                "nz_date": best["nz_date"],
+                "us_et_date": best["us_et_date"],
+                "starts_in": starts_in_text(start_dt),
+                "time_status": status,
+                "time_locked": time_locked,
                 "game": f'{best["away"]} @ {best["home"]}',
                 "home": best["home"],
                 "away": best["away"],
@@ -314,11 +474,15 @@ def build_candidates(events: List[Dict[str, Any]], selected_markets: List[str]) 
             })
     return candidates
 
+
 def decide(c: Dict[str, Any], rules: Dict[str, Any], flags: Dict[str, bool], approved_count: int, loss_streak: int):
     min_odds = float(rules["min_odds"])
     max_odds = float(rules["max_odds"])
     min_edge = float(rules["min_edge_pct"]) / 100
     elite_edge = float(rules["elite_edge_pct"]) / 100
+
+    if c.get("time_locked"):
+        return "LOCKED — TIME WINDOW", 0, "Time window", c.get("time_status", "Game time locked")
 
     if flags.get("late_chase_feeling"):
         return "LOCKED — EMOTIONAL RISK", 0, "Locked/chase", "Late/chase feeling marked"
@@ -362,30 +526,39 @@ def decide(c: Dict[str, Any], rules: Dict[str, Any], flags: Dict[str, bool], app
         return "ELITE PAPER PICK", score, "Approved", "Best-price edge and GOAT gates passed"
     return "APPROVED PAPER PICK", score, "Approved", "Best-price board and GOAT gates passed"
 
+
+# =========================================================
+# PAPER LOG
+# =========================================================
 def load_log():
-    if "paper_log_v32" not in st.session_state:
+    if "paper_log_v33" not in st.session_state:
         if PICKS_PATH.exists():
             try:
-                st.session_state.paper_log_v32 = pd.read_csv(PICKS_PATH)
+                st.session_state.paper_log_v33 = pd.read_csv(PICKS_PATH)
             except Exception:
-                st.session_state.paper_log_v32 = pd.DataFrame()
+                st.session_state.paper_log_v33 = pd.DataFrame()
         else:
-            st.session_state.paper_log_v32 = pd.DataFrame()
-    return st.session_state.paper_log_v32
+            st.session_state.paper_log_v33 = pd.DataFrame()
+    return st.session_state.paper_log_v33
+
 
 def save_log(df):
-    st.session_state.paper_log_v32 = df
+    st.session_state.paper_log_v33 = df
     PICKS_PATH.parent.mkdir(exist_ok=True)
     try:
         df.to_csv(PICKS_PATH, index=False)
     except Exception:
         pass
 
+
 def approved_today_count(df):
     if df.empty or "created_at" not in df.columns or "decision" not in df.columns:
         return 0
-    today = datetime.now().date().isoformat()
-    return int((df["created_at"].astype(str).str.startswith(today) & df["decision"].astype(str).str.contains("APPROVED|ELITE", regex=True)).sum())
+    today = datetime.now(NZ_TZ).date().isoformat()
+    if "nz_date" in df.columns:
+        return int((df["nz_date"].astype(str).eq(today) & df["decision"].astype(str).str.contains("APPROVED|ELITE", regex=True)).sum())
+    return int(df["decision"].astype(str).str.contains("APPROVED|ELITE", regex=True).sum())
+
 
 def loss_streak_count(df):
     if df.empty or "result" not in df.columns:
@@ -399,9 +572,13 @@ def loss_streak_count(df):
             break
     return streak
 
+
+# =========================================================
+# UI
+# =========================================================
 def main():
-    st.title("🐐 GOAT Shield Live v3.2")
-    st.caption("Best Price Board + active sports + moneyline/spreads/totals + no-pick explanation. Paper-only. No sportsbook login. No real-money auto-betting.")
+    st.title("🐐 GOAT Shield Live v3.3")
+    st.caption("NZ Bettor Mode + Best Price Board + US sports time conversion. Paper-only. No sportsbook login. No real-money auto-betting.")
 
     api_key_default = secret("ODDS_API_KEY", "")
 
@@ -413,18 +590,46 @@ def main():
         api_key = st.text_input("The Odds API key", value=api_key_default, type="password")
 
         if st.button("Reload active sports"):
-            st.session_state.pop("sports_map_v32", None)
+            st.session_state.pop("sports_map_v33", None)
             st.rerun()
 
         sports_map = get_sports_map(api_key)
         sport_keys = list(sports_map.keys())
         default_sport = "baseball_mlb" if "baseball_mlb" in sport_keys else sport_keys[0]
 
-        selected_sports = st.multiselect("Active sports to scan", sport_keys, default=[default_sport], format_func=lambda k: sports_map.get(k, k))
-        markets = st.multiselect("Markets", ["h2h", "spreads", "totals"], default=["h2h"], format_func=lambda x: {"h2h":"Moneyline / h2h", "spreads":"Spreads", "totals":"Totals"}[x])
+        selected_sports = st.multiselect(
+            "Active sports to scan",
+            sport_keys,
+            default=[default_sport],
+            format_func=lambda k: sports_map.get(k, k),
+        )
+
+        markets = st.multiselect(
+            "Markets",
+            ["h2h", "spreads", "totals"],
+            default=["h2h"],
+            format_func=lambda x: {"h2h": "Moneyline / h2h", "spreads": "Spreads", "totals": "Totals"}[x],
+        )
+
         regions = st.multiselect("Regions", ["us", "uk", "au", "eu"], default=["us"])
         bookmakers_filter = st.text_input("Optional bookmaker filter", value="", help="Example: pinnacle,draftkings. Leave blank to use regions.")
-        time_filter = st.selectbox("Time filter", ["No time filter", "Today NZ", "Next 24 hours"], index=0)
+
+        time_filter = st.selectbox(
+            "Time filter",
+            [
+                "NZ Bettor Mode: Next 24 hours",
+                "NZ Bettor Mode: Next 36 hours",
+                "Today NZ",
+                "Today US Eastern",
+                "Tomorrow US Eastern",
+                "No time filter",
+            ],
+            index=0,
+        )
+
+        start, end = time_window(time_filter)
+        if start and end:
+            st.caption(f"API window UTC: {start} → {end}")
 
         est = max(1, len(selected_sports)) * max(1, len(markets)) * (1 if bookmakers_filter.strip() else max(1, len(regions)))
         st.caption(f"Estimated credits/fetch: about {est}. Start small.")
@@ -435,8 +640,9 @@ def main():
         rules["max_odds"] = st.number_input("Max decimal odds", 1.01, 10.0, float(rules["max_odds"]), 0.01)
         rules["min_edge_pct"] = st.number_input("Min edge %", 0.0, 50.0, float(rules["min_edge_pct"]), 0.1)
         rules["elite_edge_pct"] = st.number_input("Elite edge %", 0.0, 50.0, float(rules["elite_edge_pct"]), 0.1)
-        rules["max_daily"] = st.number_input("Max approved paper picks/day", 1, 20, int(rules["max_daily"]), 1)
+        rules["max_daily"] = st.number_input("Max approved paper picks per NZ day", 1, 20, int(rules["max_daily"]), 1)
         rules["lock_losses"] = st.number_input("Loss-streak lockout", 1, 20, int(rules["lock_losses"]), 1)
+        rules["min_minutes_before_start"] = st.number_input("Lock if game starts within minutes", 0, 240, int(rules["min_minutes_before_start"]), 5)
         rules["apply_home_rules_to_team_markets"] = st.checkbox("Apply home rules to team markets only", True)
         rules["require_home_pick"] = st.checkbox("Require team-market pick to be home team", True)
         rules["require_home_favourite"] = st.checkbox("Require home favourite for team markets", True)
@@ -454,13 +660,14 @@ def main():
         }
 
     log_df = load_log()
-    tabs = st.tabs(["🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "🛡️ Backup"])
+
+    tabs = st.tabs(["🇳🇿 NZ Bettor Board", "🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "🛡️ Backup"])
 
     with tabs[0]:
-        st.subheader("🟢 Best Price Board")
-        st.info("Compares bookmaker prices for the same game + market + pick. Paper research only.")
+        st.subheader("🇳🇿 NZ Bettor Board")
+        st.info("This board is built for betting from NZ on US sports. It shows NZ time, US Eastern time, US game date, NZ betting date, and locks games that are already started or too close.")
 
-        if st.button("Fetch best prices"):
+        if st.button("Fetch NZ bettor board"):
             if not api_key:
                 st.error("Add your Odds API key first.")
                 st.stop()
@@ -474,12 +681,12 @@ def main():
                 st.error("Choose region or bookmaker filter.")
                 st.stop()
 
-            start, end = nz_time_window(time_filter)
+            start, end = time_window(time_filter)
             events = []
             metas = []
             errors = []
 
-            with st.spinner("Fetching bookmaker prices..."):
+            with st.spinner("Fetching bookmaker prices with NZ/US time conversion..."):
                 for sport in selected_sports:
                     try:
                         ev, meta = fetch_odds(api_key, sport, ",".join(regions), ",".join(markets), bookmakers_filter, start, end)
@@ -488,21 +695,21 @@ def main():
                     except Exception as e:
                         errors.append(f"{sports_map.get(sport, sport)}: {clean_api_error(e)}")
 
-            st.session_state["events_v32"] = events
-            st.session_state["markets_v32"] = markets
-            st.session_state["metas_v32"] = metas
+            st.session_state["events_v33"] = events
+            st.session_state["markets_v33"] = markets
+            st.session_state["metas_v33"] = metas
+            st.session_state["rules_v33"] = rules
 
             for e in errors:
                 st.error(e)
-
             if metas:
                 st.success(f"Fetched {len(events)} events. Requests used: {metas[-1].get('requests_used')}. Remaining: {metas[-1].get('requests_remaining')}.")
 
-        events = st.session_state.get("events_v32", [])
-        last_markets = st.session_state.get("markets_v32", markets)
+        events = st.session_state.get("events_v33", [])
+        last_markets = st.session_state.get("markets_v33", markets)
 
         if events:
-            candidates = build_candidates(events, last_markets)
+            candidates = build_candidates(events, last_markets, int(rules["min_minutes_before_start"]))
             rows = []
             app_count = approved_today_count(log_df)
             streak = loss_streak_count(log_df)
@@ -528,38 +735,54 @@ def main():
                 c4.metric("Rejected/Locked", reject_n)
 
                 if approved_n == 0:
-                    text = ", ".join([f"{k}: {v}" for k, v in summary.most_common(5)]) or "No strong edge found"
+                    text = ", ".join([f"{k}: {v}" for k, v in summary.most_common(6)]) or "No strong edge found"
                     st.warning(f"No approved paper picks. Main blockers: {text}")
-                    if summary:
-                        st.write("Main no-pick reasons:")
-                        for k, v in summary.most_common(5):
-                            st.write(f"- {k}: {v}")
                 else:
                     st.success(f"{approved_n} approved/elite paper candidate(s). Paper-log only.")
 
                 board = pd.DataFrame(rows)
-                board["sort"] = board["decision"].map({"ELITE PAPER PICK":0, "APPROVED PAPER PICK":1, "WATCHLIST — PINNACLE NOT CONFIRMED":2}).fillna(9)
-                board = board.sort_values(["sort", "edge", "best_odds"], ascending=[True, False, False]).reset_index(drop=True)
+                board["sort"] = board["decision"].map({"ELITE PAPER PICK": 0, "APPROVED PAPER PICK": 1, "WATCHLIST — PINNACLE NOT CONFIRMED": 2}).fillna(9)
+                board = board.sort_values(["sort", "time_locked", "edge", "best_odds"], ascending=[True, True, False, False]).reset_index(drop=True)
 
-                cols = ["decision", "score", "sport", "game", "market_label", "pick", "best_odds", "best_bookmaker", "avg_odds", "pinnacle", "tab_betcha", "bet365", "edge", "books", "reasons", "all_prices"]
-                st.dataframe(board[cols].style.format({"edge":"{:.2%}", "best_odds":"{:.2f}", "avg_odds":"{:.2f}"}), use_container_width=True, hide_index=True)
+                cols = [
+                    "decision", "score", "time_status", "starts_in",
+                    "start_nz", "start_et", "nz_date", "us_et_date",
+                    "sport", "game", "market_label", "pick",
+                    "best_odds", "best_bookmaker", "avg_odds",
+                    "pinnacle", "tab_betcha", "bet365",
+                    "edge", "books", "reasons", "all_prices",
+                ]
+                st.dataframe(
+                    board[cols].style.format({"edge": "{:.2%}", "best_odds": "{:.2f}", "avg_odds": "{:.2f}"}),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
                 st.subheader("👀 Closest missed picks")
                 missed = board[~board["decision"].astype(str).str.contains("APPROVED|ELITE", regex=True, na=False)].sort_values(["edge", "score"], ascending=[False, False]).head(5)
                 if missed.empty:
                     st.info("No closest misses.")
                 else:
-                    st.dataframe(missed[["decision", "market_label", "pick", "best_odds", "best_bookmaker", "edge", "reasons", "all_prices"]].style.format({"edge":"{:.2%}", "best_odds":"{:.2f}"}), use_container_width=True, hide_index=True)
+                    st.dataframe(
+                        missed[["decision", "time_status", "starts_in", "start_nz", "start_et", "market_label", "pick", "best_odds", "best_bookmaker", "edge", "reasons", "all_prices"]].style.format({"edge": "{:.2%}", "best_odds": "{:.2f}"}),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
                 approved_rows = board[board["decision"].astype(str).str.contains("APPROVED|ELITE", regex=True, na=False)]
                 if not approved_rows.empty:
-                    labels = approved_rows.apply(lambda x: f"{x.name}: {x['decision']} — {x['pick']} @ {x['best_odds']} ({x['best_bookmaker']})", axis=1).tolist()
+                    labels = approved_rows.apply(lambda x: f"{x.name}: {x['decision']} — {x['pick']} @ {x['best_odds']} ({x['best_bookmaker']}) — {x['start_nz']}", axis=1).tolist()
                     choice = st.selectbox("Approved/elite candidate to paper-log", labels)
                     idx = int(choice.split(":")[0])
                     if st.button("Log selected as PAPER pick"):
                         chosen = board.loc[idx].to_dict()
                         log_row = {
                             "created_at": iso_z(datetime.now(timezone.utc)),
+                            "nz_date": chosen["nz_date"],
+                            "us_et_date": chosen["us_et_date"],
+                            "start_nz": chosen["start_nz"],
+                            "start_et": chosen["start_et"],
+                            "starts_in": chosen["starts_in"],
                             "sport": chosen["sport"],
                             "game": chosen["game"],
                             "market": chosen["market_label"],
@@ -585,6 +808,11 @@ def main():
                         st.rerun()
 
     with tabs[1]:
+        st.subheader("🟢 Best Price Board")
+        st.write("Use the NZ Bettor Board first. It includes all best-price board columns plus NZ/US time conversion.")
+        st.caption("v3.3 keeps this tab as a simple explanation so the phone UI stays cleaner.")
+
+    with tabs[2]:
         st.subheader("📒 Paper Log")
         df = load_log()
         if df.empty:
@@ -593,7 +821,7 @@ def main():
             st.dataframe(df, use_container_width=True)
             st.download_button("Download CSV", df.to_csv(index=False).encode("utf-8"), "goat_shield_paper_log.csv", "text/csv")
 
-    with tabs[2]:
+    with tabs[3]:
         st.subheader("✅ Results")
         df = load_log()
         if df.empty or "result" not in df.columns:
@@ -603,7 +831,7 @@ def main():
             if pending.empty:
                 st.info("No pending picks.")
             else:
-                labels = pending.apply(lambda r: f"{r.name}: {r.get('pick_label','Pick')} @ {r.get('best_odds','')}", axis=1).tolist()
+                labels = pending.apply(lambda r: f"{r.name}: {r.get('pick_label','Pick')} @ {r.get('best_odds','')} — {r.get('start_nz','')}", axis=1).tolist()
                 selected = st.selectbox("Select pick", labels)
                 idx = int(selected.split(":")[0])
                 result = st.selectbox("Result", ["Won", "Lost", "Push"])
@@ -619,7 +847,7 @@ def main():
                     st.success("Saved.")
                     st.rerun()
 
-    with tabs[3]:
+    with tabs[4]:
         st.subheader("📊 Dashboard")
         df = load_log()
         if df.empty:
@@ -630,16 +858,22 @@ def main():
             profit = pd.to_numeric(settled.get("profit_units", pd.Series(dtype=float)), errors="coerce").fillna(0).sum() if not settled.empty else 0
             roi = profit / max(len(settled), 1)
             clv = pd.to_numeric(settled.get("clv", pd.Series(dtype=float)), errors="coerce").dropna() if not settled.empty else pd.Series(dtype=float)
+
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Settled", len(settled))
             c2.metric("Pending", len(pending))
             c3.metric("Profit units", f"{profit:+.2f}u")
             c4.metric("ROI", f"{roi*100:.1f}%")
-            st.progress(min(1, len(settled)/300), text=f"Proof progress: {len(settled)}/300 settled paper picks")
+
+            st.progress(min(1, len(settled) / 300), text=f"Proof progress: {len(settled)}/300 settled paper picks")
             st.metric("Positive CLV", f"{((clv > 0).mean()*100 if len(clv) else 0):.1f}%")
             st.warning("System verdict: NOT PROVEN — keep paper testing." if len(settled) < 300 else "300-pick proof reached. Review ROI and CLV carefully.")
 
-    with tabs[4]:
+            if "market" in df.columns:
+                st.subheader("Performance by market")
+                st.dataframe(df.groupby("market", dropna=False).size().reset_index(name="paper_picks"), use_container_width=True)
+
+    with tabs[5]:
         st.subheader("🛡️ Backup")
         df = load_log()
         if not df.empty:
@@ -656,7 +890,8 @@ def main():
                 st.error(f"Restore failed: {e}")
 
     st.divider()
-    st.caption("GOAT Shield Live v3.2 is paper-only. No real-money bets, no sportsbook login, no scraping, no auto-betting.")
+    st.caption("GOAT Shield Live v3.3 is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+
 
 if __name__ == "__main__":
     main()
