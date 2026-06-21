@@ -61,7 +61,7 @@ BET365_HINTS = ("bet365",)
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v3.4",
+    page_title="GOAT Shield Live v3.5",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -475,21 +475,158 @@ def build_candidates(events: List[Dict[str, Any]], selected_markets: List[str], 
     return candidates
 
 
+
+def score_edge_component(edge: float, min_edge: float, elite_edge: float) -> int:
+    """0–30 points. Negative edge is weak. Elite edge is strong."""
+    if edge >= elite_edge:
+        return 30
+    if edge >= min_edge:
+        span = max(elite_edge - min_edge, 0.0001)
+        return int(22 + 8 * ((edge - min_edge) / span))
+    if edge > 0:
+        return int(6 + 14 * min(edge / max(min_edge, 0.0001), 1))
+    return max(0, int(5 + edge * 100))
+
+
+def score_odds_component(best_odds: float, min_odds: float, max_odds: float) -> int:
+    """0–10 points. Your safe odds range is protected."""
+    return 10 if min_odds <= best_odds <= max_odds else 0
+
+
+def score_book_component(books: int, pinnacle_ok: bool, best_odds: float, avg_odds: float) -> int:
+    """0–20 points. More books + best price above average = stronger signal."""
+    pts = min(10, int(books) * 2)
+    if best_odds >= avg_odds:
+        pts += 5
+    if pinnacle_ok:
+        pts += 5
+    return min(20, pts)
+
+
+def score_time_component(c: Dict[str, Any]) -> int:
+    """0–10 points. Started/too-close games are not safe."""
+    return 0 if c.get("time_locked") else 10
+
+
+def score_rule_component(c: Dict[str, Any], rules: Dict[str, Any]) -> int:
+    """0–15 points. Home/team rules matter only for team markets."""
+    pts = 15
+    if rules["apply_home_rules_to_team_markets"] and c["market"] in ("h2h", "spreads"):
+        if rules["require_home_pick"] and not c["home_pick"]:
+            pts -= 8
+        if rules["require_home_favourite"] and not c["home_fav"]:
+            pts -= 7
+    return max(0, pts)
+
+
+def score_discipline_component(flags: Dict[str, bool], approved_count: int, loss_streak: int, rules: Dict[str, Any]) -> int:
+    """0–15 points. This is Abhi-protection logic."""
+    pts = 15
+    if flags.get("late_chase_feeling"):
+        pts -= 15
+    manual_reds = ["injury_red", "public_red", "fatigue_red", "line_against", "key_player_red"]
+    pts -= 3 * sum(1 for f in manual_reds if flags.get(f))
+    if loss_streak >= int(rules["lock_losses"]):
+        pts -= 10
+    if approved_count >= int(rules["max_daily"]):
+        pts -= 10
+    return max(0, pts)
+
+
+def goat_score_breakdown(c: Dict[str, Any], rules: Dict[str, Any], flags: Dict[str, bool], approved_count: int, loss_streak: int) -> Dict[str, int]:
+    min_odds = float(rules["min_odds"])
+    max_odds = float(rules["max_odds"])
+    min_edge = float(rules["min_edge_pct"]) / 100
+    elite_edge = float(rules["elite_edge_pct"]) / 100
+
+    parts = {
+        "Edge quality": score_edge_component(float(c.get("edge", 0)), min_edge, elite_edge),
+        "Odds range": score_odds_component(float(c.get("best_odds", 0)), min_odds, max_odds),
+        "Bookmaker support": score_book_component(int(c.get("books", 0)), bool(c.get("pinnacle_ok")), float(c.get("best_odds", 0)), float(c.get("avg_odds", 0))),
+        "Time safety": score_time_component(c),
+        "GOAT rules": score_rule_component(c, rules),
+        "Discipline": score_discipline_component(flags, approved_count, loss_streak, rules),
+    }
+    return parts
+
+
+def goat_score_total(parts: Dict[str, int]) -> int:
+    return int(max(0, min(100, sum(parts.values()))))
+
+
+def score_parts_text(parts: Dict[str, int]) -> str:
+    return " | ".join([f"{k}: {v}" for k, v in parts.items()])
+
+
+def plain_explanation(decision: str, c: Dict[str, Any], reason: str, rules: Dict[str, Any]) -> str:
+    edge_pct = float(c.get("edge", 0)) * 100
+    best_odds = float(c.get("best_odds", 0))
+    avg_odds = float(c.get("avg_odds", 0))
+    min_edge = float(rules["min_edge_pct"])
+    min_odds = float(rules["min_odds"])
+    max_odds = float(rules["max_odds"])
+
+    if "APPROVED" in decision or "ELITE" in decision:
+        return "Clean enough for PAPER tracking only. Best price, time window, and GOAT rules passed. Do not use real money until the 300-pick proof is positive."
+    if "WATCHLIST" in decision:
+        return "This is not approved yet. It needs extra confirmation, usually sharp-book/Pinnacle support. Watch only; do not log as approved."
+    if "TIME WINDOW" in decision:
+        return "Game is already started or too close. This is exactly where rushed/chase bets happen. Leave it."
+    if "LOSS STREAK" in decision:
+        return "System is protecting you from chasing after losses. Stop scanning and review later."
+    if "DAILY LIMIT" in decision:
+        return "Daily limit reached. The system is stopping over-action."
+    if "EMOTIONAL" in decision:
+        return "Late/chase feeling is marked. That is an automatic no."
+    if "RED FLAG" in decision:
+        return f"A manual red flag is active: {reason}. No pick."
+    if "ODDS RANGE" in decision:
+        return f"Best odds are {best_odds:.2f}, outside your safe range {min_odds:.2f}–{max_odds:.2f}. No pick."
+    if "EDGE TOO LOW" in decision:
+        if edge_pct < 0:
+            return f"No real value. Best odds {best_odds:.2f} are not better than the market estimate. Edge is negative ({edge_pct:.2f}%). Do not chase."
+        return f"Small positive signal, but not enough. Edge is {edge_pct:.2f}% and your minimum is {min_edge:.2f}%. No paper pick."
+    if "NOT HOME PICK" in decision:
+        return "Your team-market rule requires the home team. This pick is not the home team."
+    if "NOT HOME FAVOURITE" in decision:
+        return "Your rule requires the home favourite. This pick does not pass that safety gate."
+    return reason or "No clean GOAT approval."
+
+
+def action_text(decision: str) -> str:
+    if "ELITE" in decision:
+        return "Action: log as ELITE paper pick only."
+    if "APPROVED" in decision:
+        return "Action: log as PAPER pick only."
+    if "WATCHLIST" in decision:
+        return "Action: watch only. Do not log as approved."
+    return "Action: do not log. Do not bet."
+
+
 def decide(c: Dict[str, Any], rules: Dict[str, Any], flags: Dict[str, bool], approved_count: int, loss_streak: int):
     min_odds = float(rules["min_odds"])
     max_odds = float(rules["max_odds"])
     min_edge = float(rules["min_edge_pct"]) / 100
     elite_edge = float(rules["elite_edge_pct"]) / 100
 
+    parts = goat_score_breakdown(c, rules, flags, approved_count, loss_streak)
+    score = goat_score_total(parts)
+
     if c.get("time_locked"):
-        return "LOCKED — TIME WINDOW", 0, "Time window", c.get("time_status", "Game time locked")
+        decision, bucket, reason = "LOCKED — TIME WINDOW", "Time window", c.get("time_status", "Game time locked")
+        return decision, score, bucket, reason, plain_explanation(decision, c, reason, rules), action_text(decision), score_parts_text(parts)
 
     if flags.get("late_chase_feeling"):
-        return "LOCKED — EMOTIONAL RISK", 0, "Locked/chase", "Late/chase feeling marked"
+        decision, bucket, reason = "LOCKED — EMOTIONAL RISK", "Locked/chase", "Late/chase feeling marked"
+        return decision, score, bucket, reason, plain_explanation(decision, c, reason, rules), action_text(decision), score_parts_text(parts)
+
     if loss_streak >= int(rules["lock_losses"]):
-        return "LOCKED — LOSS STREAK", 0, "Locked/loss streak", f"Loss streak {loss_streak}"
+        decision, bucket, reason = "LOCKED — LOSS STREAK", "Locked/loss streak", f"Loss streak {loss_streak}"
+        return decision, score, bucket, reason, plain_explanation(decision, c, reason, rules), action_text(decision), score_parts_text(parts)
+
     if approved_count >= int(rules["max_daily"]):
-        return "LOCKED — DAILY LIMIT", 0, "Locked/daily limit", "Daily limit reached"
+        decision, bucket, reason = "LOCKED — DAILY LIMIT", "Locked/daily limit", "Daily limit reached"
+        return decision, score, bucket, reason, plain_explanation(decision, c, reason, rules), action_text(decision), score_parts_text(parts)
 
     red_list = []
     if flags.get("injury_red"): red_list.append("Injury/news red flag")
@@ -498,33 +635,39 @@ def decide(c: Dict[str, Any], rules: Dict[str, Any], flags: Dict[str, bool], app
     if flags.get("line_against"): red_list.append("Line moved against pick")
     if flags.get("key_player_red"): red_list.append("Key player uncertainty")
     if red_list and rules["reject_red_flags"]:
-        return "REJECTED — RED FLAG", 0, "Red flag", "; ".join(red_list)
+        decision, bucket, reason = "REJECTED — RED FLAG", "Red flag", "; ".join(red_list)
+        return decision, score, bucket, reason, plain_explanation(decision, c, reason, rules), action_text(decision), score_parts_text(parts)
 
     if not (min_odds <= c["best_odds"] <= max_odds):
-        return "REJECTED — ODDS RANGE", 0, "Odds range", f'Best odds {c["best_odds"]:.2f} outside {min_odds:.2f}-{max_odds:.2f}'
+        decision, bucket, reason = "REJECTED — ODDS RANGE", "Odds range", f'Best odds {c["best_odds"]:.2f} outside {min_odds:.2f}-{max_odds:.2f}'
+        return decision, score, bucket, reason, plain_explanation(decision, c, reason, rules), action_text(decision), score_parts_text(parts)
 
     if c["edge"] < min_edge:
-        return "REJECTED — EDGE TOO LOW", 0, "Edge too low", f'Edge {c["edge"]*100:.2f}% below {min_edge*100:.2f}%'
+        decision, bucket, reason = "REJECTED — EDGE TOO LOW", "Edge too low", f'Edge {c["edge"]*100:.2f}% below {min_edge*100:.2f}%'
+        return decision, score, bucket, reason, plain_explanation(decision, c, reason, rules), action_text(decision), score_parts_text(parts)
 
     if rules["apply_home_rules_to_team_markets"] and c["market"] in ("h2h", "spreads"):
         if rules["require_home_pick"] and not c["home_pick"]:
-            return "REJECTED — NOT HOME PICK", 0, "Not home pick", "Pick is not home team"
+            decision, bucket, reason = "REJECTED — NOT HOME PICK", "Not home pick", "Pick is not home team"
+            return decision, score, bucket, reason, plain_explanation(decision, c, reason, rules), action_text(decision), score_parts_text(parts)
         if rules["require_home_favourite"] and not c["home_fav"]:
-            return "REJECTED — NOT HOME FAVOURITE", 0, "Not home favourite", "Home favourite rule failed"
+            decision, bucket, reason = "REJECTED — NOT HOME FAVOURITE", "Not home favourite", "Home favourite rule failed"
+            return decision, score, bucket, reason, plain_explanation(decision, c, reason, rules), action_text(decision), score_parts_text(parts)
 
     if rules["require_pinnacle_value"] and not c["pinnacle_ok"]:
-        return "WATCHLIST — PINNACLE NOT CONFIRMED", 45, "Pinnacle missing", "Pinnacle value not confirmed"
+        decision, bucket, reason = "WATCHLIST — PINNACLE NOT CONFIRMED", "Pinnacle missing", "Pinnacle value not confirmed"
+        return decision, score, bucket, reason, plain_explanation(decision, c, reason, rules), action_text(decision), score_parts_text(parts)
 
-    score = 25 + min(15, c["books"])
-    score += 20 if c["edge"] >= elite_edge else 0
-    score += 10 if c["best_odds"] >= c["avg_odds"] else 0
-    score += 10 if c["pinnacle_ok"] else 0
-    score += 10 if c["market"] == "h2h" else 7
-    score = min(score, 100)
+    if c["edge"] >= elite_edge and score >= 85:
+        decision, bucket, reason = "ELITE PAPER PICK", "Approved", "GOAT Score 85+ with elite edge and safety gates passed"
+        return decision, score, bucket, reason, plain_explanation(decision, c, reason, rules), action_text(decision), score_parts_text(parts)
 
-    if c["edge"] >= elite_edge and score >= 75:
-        return "ELITE PAPER PICK", score, "Approved", "Best-price edge and GOAT gates passed"
-    return "APPROVED PAPER PICK", score, "Approved", "Best-price board and GOAT gates passed"
+    if score >= 75:
+        decision, bucket, reason = "APPROVED PAPER PICK", "Approved", "GOAT Score 75+ and safety gates passed"
+        return decision, score, bucket, reason, plain_explanation(decision, c, reason, rules), action_text(decision), score_parts_text(parts)
+
+    decision, bucket, reason = "WATCHLIST — SCORE TOO LOW", "Score too low", f"GOAT Score {score}/100 below 75"
+    return decision, score, bucket, reason, plain_explanation(decision, c, reason, rules), action_text(decision), score_parts_text(parts)
 
 
 
@@ -558,6 +701,7 @@ def edge_badge(edge: float) -> str:
     return f"🔴 Negative edge {e:.2f}%"
 
 
+
 def render_candidate_card(row: dict, idx: int):
     decision = str(row.get("decision", ""))
     pick = str(row.get("pick", ""))
@@ -568,6 +712,10 @@ def render_candidate_card(row: dict, idx: int):
     avg_odds = row.get("avg_odds", "")
     edge = safe_float(row.get("edge", 0), 0)
     reasons = str(row.get("reasons", ""))
+    plain = str(row.get("plain_explanation", reasons))
+    action = str(row.get("action", action_text(decision)))
+    score = int(safe_float(row.get("score", 0), 0))
+    score_parts = str(row.get("score_parts", ""))
     status = str(row.get("time_status", ""))
     starts_in = str(row.get("starts_in", ""))
     start_nz = str(row.get("start_nz", ""))
@@ -593,17 +741,39 @@ def render_candidate_card(row: dict, idx: int):
         st.write(game)
 
         c1, c2 = st.columns(2)
-        c1.metric("Best odds", f"{safe_float(best_odds, 0):.2f}" if best_odds != "" else "-")
+        c1.metric("GOAT Score", f"{score}/100")
         c2.metric("Edge", f"{edge*100:.2f}%")
 
+        st.progress(min(max(score, 0), 100) / 100)
+
+        c3, c4 = st.columns(2)
+        c3.metric("Best odds", f"{safe_float(best_odds, 0):.2f}" if best_odds != "" else "-")
+        c4.metric("Avg odds", f"{safe_float(avg_odds, 0):.2f}" if avg_odds != "" else "-")
+
         st.markdown(f"**Best bookmaker:** {best_book}")
-        st.markdown(f"**Average odds:** {safe_float(avg_odds, 0):.2f}" if avg_odds != "" else "**Average odds:** -")
         st.markdown(f"**Time:** {status} • starts in **{starts_in}**")
         st.markdown(f"**NZ:** {start_nz}")
         st.markdown(f"**US ET:** {start_et}")
         st.caption(f"NZ betting date: {nz_date} | US game date: {us_date}")
-        st.info(f"{edge_badge(edge)} — {reasons}")
+
+        if "APPROVED" in decision or "ELITE" in decision:
+            st.success(plain)
+        elif "WATCHLIST" in decision:
+            st.warning(plain)
+        else:
+            st.error(plain)
+
+        st.info(action)
+        st.caption(f"Raw reason: {reasons}")
         st.caption(f"Prices: {prices}")
+
+        with st.expander("GOAT Score breakdown"):
+            if score_parts:
+                for item in score_parts.split(" | "):
+                    st.write(f"- {item}")
+            else:
+                st.write("No score breakdown available.")
+
 
 
 def mobile_card_dataframe(board: pd.DataFrame, mode: str, max_cards: int) -> pd.DataFrame:
@@ -672,8 +842,8 @@ def loss_streak_count(df):
 # UI
 # =========================================================
 def main():
-    st.title("🐐 GOAT Shield Live v3.4")
-    st.caption("NZ Bettor Mode + mobile card view + Best Price Board + US sports time conversion. Paper-only. No sportsbook login. No real-money auto-betting.")
+    st.title("🐐 GOAT Shield Live v3.5")
+    st.caption("GOAT Score + better card explanations + NZ Bettor Mode + Best Price Board + US sports time conversion. Paper-only. No sportsbook login. No real-money auto-betting.")
 
     api_key_default = secret("ODDS_API_KEY", "")
 
@@ -810,9 +980,9 @@ def main():
             streak = loss_streak_count(log_df)
 
             for c in candidates:
-                decision, score, bucket, reason = decide(c, rules, flags, app_count, streak)
+                decision, score, bucket, reason, plain, action, score_parts = decide(c, rules, flags, app_count, streak)
                 r = dict(c)
-                r.update({"decision": decision, "score": score, "reject_bucket": bucket, "reasons": reason})
+                r.update({"decision": decision, "score": score, "reject_bucket": bucket, "reasons": reason, "plain_explanation": plain, "action": action, "score_parts": score_parts})
                 rows.append(r)
 
             if not rows:
@@ -840,12 +1010,12 @@ def main():
                 board = board.sort_values(["sort", "time_locked", "edge", "best_odds"], ascending=[True, True, False, False]).reset_index(drop=True)
 
                 cols = [
-                    "decision", "score", "time_status", "starts_in",
+                    "decision", "score", "plain_explanation", "action", "time_status", "starts_in",
                     "start_nz", "start_et", "nz_date", "us_et_date",
                     "sport", "game", "market_label", "pick",
                     "best_odds", "best_bookmaker", "avg_odds",
                     "pinnacle", "tab_betcha", "bet365",
-                    "edge", "books", "reasons", "all_prices",
+                    "edge", "books", "reasons", "score_parts", "all_prices",
                 ]
                 st.dataframe(
                     board[cols].style.format({"edge": "{:.2%}", "best_odds": "{:.2f}", "avg_odds": "{:.2f}"}),
@@ -862,7 +1032,7 @@ def main():
                     st.info("No closest misses.")
                 else:
                     st.dataframe(
-                        missed[["decision", "time_status", "starts_in", "start_nz", "start_et", "market_label", "pick", "best_odds", "best_bookmaker", "edge", "reasons", "all_prices"]].style.format({"edge": "{:.2%}", "best_odds": "{:.2f}"}),
+                        missed[["decision", "score", "plain_explanation", "action", "time_status", "starts_in", "start_nz", "start_et", "market_label", "pick", "best_odds", "best_bookmaker", "edge", "reasons", "all_prices"]].style.format({"edge": "{:.2%}", "best_odds": "{:.2f}"}),
                         use_container_width=True,
                         hide_index=True,
                     )
@@ -894,6 +1064,8 @@ def main():
                             "edge": chosen["edge"],
                             "decision": chosen["decision"],
                             "score": chosen["score"],
+                            "plain_explanation": chosen.get("plain_explanation", ""),
+                            "score_parts": chosen.get("score_parts", ""),
                             "result": "Pending",
                             "profit_units": "",
                             "closing_odds": "",
@@ -907,7 +1079,7 @@ def main():
 
     with tabs[1]:
         st.subheader("📱 Mobile Cards")
-        st.write("Clean iPhone view for the same scan. No sideways scrolling needed.")
+        st.write("Clean iPhone view with GOAT Score, plain-English explanations, and clear action labels.")
         events_cards = st.session_state.get("events_v33", [])
         last_markets_cards = st.session_state.get("markets_v33", markets)
         if not events_cards:
@@ -918,9 +1090,9 @@ def main():
             app_count_cards = approved_today_count(log_df)
             streak_cards = loss_streak_count(log_df)
             for cand in candidates_cards:
-                decision, score, bucket, reason = decide(cand, rules, flags, app_count_cards, streak_cards)
+                decision, score, bucket, reason, plain, action, score_parts = decide(cand, rules, flags, app_count_cards, streak_cards)
                 rr = dict(cand)
-                rr.update({"decision": decision, "score": score, "reject_bucket": bucket, "reasons": reason})
+                rr.update({"decision": decision, "score": score, "reject_bucket": bucket, "reasons": reason, "plain_explanation": plain, "action": action, "score_parts": score_parts})
                 rows_cards.append(rr)
             if not rows_cards:
                 st.warning("No card candidates found.")
@@ -928,6 +1100,7 @@ def main():
                 cards_df = pd.DataFrame(rows_cards)
                 cards_df["sort"] = cards_df["decision"].map({"ELITE PAPER PICK": 0, "APPROVED PAPER PICK": 1, "WATCHLIST — PINNACLE NOT CONFIRMED": 2}).fillna(9)
                 c_mode = st.selectbox("Card view", ["Closest missed only", "Approved / Elite only", "Upcoming only", "All ranked"], index=0)
+                st.caption("GOAT Score guide: 0–59 reject, 60–74 watchlist, 75–84 approved paper, 85+ elite paper.")
                 c_max = st.slider("Number of cards", 3, 15, 5)
                 picked_cards = mobile_card_dataframe(cards_df, c_mode, c_max)
                 if picked_cards.empty:
@@ -1019,7 +1192,7 @@ def main():
                 st.error(f"Restore failed: {e}")
 
     st.divider()
-    st.caption("GOAT Shield Live v3.4 is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v3.5 is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":

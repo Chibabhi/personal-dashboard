@@ -1,17 +1,33 @@
-# GOAT Shield Live v3.4 — Mobile Card View
+# GOAT Shield Live v3.5 — GOAT Score
 
-NZ Bettor Mode + Best Price Board + iPhone-friendly mobile cards.
+NZ Bettor Mode + Best Price Board + Mobile Cards + GOAT Score.
 
-## v3.4 upgrades
+## v3.5 upgrades
 
-- Adds 📱 Mobile Cards tab.
-- Shows closest missed picks as clean iPhone cards.
-- Shows approved/elite picks as clean iPhone cards.
-- No sideways scrolling needed for key details.
-- Default time safety lock increased to 90 minutes.
-- Time lock now triggers at ≤ lock minutes, not just under it.
+- Adds GOAT Score out of 100.
+- Adds plain-English pick explanation.
+- Adds clear action label:
+  - Do not log / do not bet
+  - Watch only
+  - Log as PAPER pick only
+  - Log as ELITE paper pick only
+- Adds score breakdown:
+  - Edge quality
+  - Odds range
+  - Bookmaker support
+  - Time safety
+  - GOAT rules
+  - Discipline
+- Adds cleaner mobile card explanations.
 - Keeps NZ time and US Eastern time side by side.
 - Keeps paper-only safety.
+
+## GOAT Score guide
+
+- 0–59 = Reject
+- 60–74 = Watchlist
+- 75–84 = Approved paper pick
+- 85+ = Elite paper pick
 
 ## Safety
 

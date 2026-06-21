@@ -1,4 +1,4 @@
-# iPhone install guide — v3.4 Mobile Cards
+# iPhone install guide — v3.5 GOAT Score
 
 Upload/replace these files in GitHub:
 
@@ -12,7 +12,7 @@ Then:
 1. Commit changes.
 2. Streamlit > Manage app > Reboot app.
 3. Open app.
-4. You should see: GOAT Shield Live v3.4
+4. You should see: GOAT Shield Live v3.5
 
 Best first settings:
 - Active sports: MLB only
@@ -32,4 +32,5 @@ How to use:
 1. Go to 🇳🇿 NZ Bettor Board.
 2. Press Fetch NZ bettor board.
 3. Open 📱 Mobile Cards.
-4. Use Closest missed only or Approved / Elite only.
+4. Read GOAT Score + plain explanation.
+5. Only log Approved / Elite paper picks.
