@@ -1,8 +1,8 @@
-# iPhone install guide — v3.8 Pinnacle Reference
+# iPhone install guide — v3.9 Public Pick Proof
 
 Unzip first. Do not upload only the ZIP to GitHub.
 
-Upload/replace these individual files:
+Upload/replace these files:
 
 - app.py
 - goat_engine_live.py
@@ -11,21 +11,17 @@ Upload/replace these individual files:
 - README_iPhone_Deploy.md
 
 Then:
-1. Press Commit changes in GitHub.
-2. Go to Streamlit.
-3. Manage app > Reboot app.
-4. If old app stays, Manage app > Clear cache/reboot.
+1. Commit changes in GitHub.
+2. Streamlit > Manage app > Reboot app.
+3. If old version stays, clear cache/reboot.
 
-Success check:
-The title must show: GOAT Shield Live v3.8 PINNACLE REF
+Success title:
+GOAT Shield Live v3.9 PUBLIC PROOF
 
-Safe first test:
-- Pull Pinnacle reference odds: ON
-- Require Pinnacle confirmation: OFF
-- Sport preset: Single / manual
-- Sport: MLB only
-- Market: Moneyline / h2h only
-- Region: us
-- Time filter: NZ Bettor Mode: Next 24 hours
-
-After scan, open Mobile Cards. Each card will show Pinnacle reference if available.
+How to use:
+1. Run 🇳🇿 NZ Bettor Board.
+2. Open 🧾 Public Pick Proof.
+3. Select a game/pick.
+4. Tap Sports Chat Place or Google search buttons.
+5. Save checked/agrees/disagrees/public-heavy risk.
+6. Open 📱 Mobile Cards to see proof status.

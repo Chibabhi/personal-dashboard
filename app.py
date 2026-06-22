@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from collections import Counter, defaultdict
+from urllib.parse import quote_plus
 
 import pandas as pd
 import streamlit as st
@@ -76,7 +77,7 @@ BET365_HINTS = ("bet365",)
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v3.8 PINNACLE REF",
+    page_title="GOAT Shield Live v3.9 PUBLIC PROOF",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -832,6 +833,7 @@ def render_candidate_card(row: dict, idx: int):
             st.error(plain)
         st.info(action)
         st.caption(f"Prices: {prices}")
+        render_public_proof_badge(row)
         with st.expander("GOAT Score breakdown"):
             if score_parts:
                 for item in score_parts.split(" | "):
@@ -906,8 +908,8 @@ def loss_streak_count(df):
 # UI
 # =========================================================
 def main():
-    st.title("🐐 GOAT Shield Live v3.8 PINNACLE REF")
-    st.caption("US National Sports Pack + NZD Decimal Odds + No Edge Gate + NZ Bettor Mode. Paper-only. No sportsbook login. No real-money auto-betting.")
+    st.title("🐐 GOAT Shield Live v3.9 PUBLIC PROOF")
+    st.caption("Sports Chat Place proof links + Pinnacle reference + NZD Decimal Odds + NZ Bettor Mode. Paper-only. No sportsbook login. No scraping.")
 
     api_key_default = secret("ODDS_API_KEY", "")
 
@@ -1042,7 +1044,7 @@ def main():
 
     log_df = load_log()
 
-    tabs = st.tabs(["🇳🇿 NZ Bettor Board", "📱 Mobile Cards", "🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "🛡️ Backup"])
+    tabs = st.tabs(["🇳🇿 NZ Bettor Board", "📱 Mobile Cards", "🧾 Public Pick Proof", "🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "🛡️ Backup"])
 
     with tabs[0]:
         st.subheader("🇳🇿 NZ Bettor Board")
@@ -1201,6 +1203,7 @@ def main():
                             "score": chosen["score"],
                             "plain_explanation": chosen.get("plain_explanation", ""),
                             "score_parts": chosen.get("score_parts", ""),
+                            "scp_proof_summary": proof_summary_text(get_public_proof(chosen)),
                             "result": "Pending",
                             "profit_units": "",
                             "closing_odds": "",
@@ -1246,11 +1249,127 @@ def main():
                         render_candidate_card(card_row.to_dict(), n)
 
     with tabs[2]:
+        st.subheader("🧾 Public Pick Proof")
+        st.info("Use this to manually check Sports Chat Place free-pick pages for the same game/date. This does not scrape the site and does not make SCP the main decision maker.")
+
+        events_proof = st.session_state.get("events_v36", [])
+        last_markets_proof = st.session_state.get("markets_v36", markets)
+        if not events_proof:
+            st.info("Run Fetch NZ bettor board first, then come here.")
+        else:
+            pinnacle_ref_proof = st.session_state.get("pinnacle_ref_v38", {}) if rules.get("show_pinnacle_reference") else {}
+            candidates_proof = build_candidates(events_proof, last_markets_proof, int(rules["min_minutes_before_start"]), pinnacle_ref_proof)
+
+            rows_proof = []
+            app_count_proof = approved_today_count(log_df)
+            streak_proof = loss_streak_count(log_df)
+
+            for cand in candidates_proof:
+                decision, score, bucket, reason, plain, action, score_parts = decide(cand, rules, flags, app_count_proof, streak_proof)
+                rr = dict(cand)
+                rr.update({
+                    "decision": decision,
+                    "score": score,
+                    "reject_bucket": bucket,
+                    "reasons": reason,
+                    "plain_explanation": plain,
+                    "action": action,
+                    "score_parts": score_parts,
+                })
+                rows_proof.append(rr)
+
+            if not rows_proof:
+                st.warning("No candidates available for public proof.")
+            else:
+                proof_df = pd.DataFrame(rows_proof)
+                proof_df["sort"] = proof_df["decision"].map({
+                    "ELITE PAPER PICK": 0,
+                    "APPROVED PAPER PICK": 1,
+                    "WATCHLIST — LOW BOOK COVERAGE": 2,
+                    "WATCHLIST — PINNACLE NOT CONFIRMED": 2,
+                    "WATCHLIST — SCORE TOO LOW": 2,
+                }).fillna(9)
+                proof_df = proof_df.sort_values(["sort", "time_locked", "score", "price_lift_pct"], ascending=[True, True, False, False]).reset_index(drop=True)
+
+                labels = proof_df.apply(
+                    lambda x: f"{x.name}: {x['decision']} — {x['pick']} — {x['game']} — {x['start_nz']}",
+                    axis=1
+                ).tolist()
+
+                choice = st.selectbox("Pick/game to check", labels)
+                idx = int(choice.split(":")[0])
+                chosen = proof_df.loc[idx].to_dict()
+
+                st.markdown(f"### {chosen.get('pick')} — {chosen.get('game')}")
+                st.write(f"NZ time: {chosen.get('start_nz')} | US ET: {chosen.get('start_et')}")
+                st.write(f"Decision: {chosen.get('decision')} | GOAT Score: {chosen.get('score')}/100")
+                st.caption(chosen.get("plain_explanation", ""))
+
+                st.markdown("#### Search links")
+                for label, url in sports_chat_place_links(chosen).items():
+                    st.link_button(label, url)
+
+                st.markdown("#### Manual proof result")
+                key = proof_key(chosen)
+                existing = load_public_proofs().get(key, {})
+
+                checked = st.checkbox("Sports Chat Place checked for this exact game/date", value=bool(existing.get("checked", False)))
+                agreement = st.selectbox(
+                    "SCP result compared with our candidate",
+                    [
+                        "Not set",
+                        "SCP agrees with our candidate",
+                        "SCP disagrees / opposite side",
+                        "SCP pick is Over",
+                        "SCP pick is Under",
+                        "SCP pick is Spread only",
+                        "No clear SCP pick found",
+                    ],
+                    index=[
+                        "Not set",
+                        "SCP agrees with our candidate",
+                        "SCP disagrees / opposite side",
+                        "SCP pick is Over",
+                        "SCP pick is Under",
+                        "SCP pick is Spread only",
+                        "No clear SCP pick found",
+                    ].index(existing.get("agreement", "Not set")) if existing.get("agreement", "Not set") in [
+                        "Not set",
+                        "SCP agrees with our candidate",
+                        "SCP disagrees / opposite side",
+                        "SCP pick is Over",
+                        "SCP pick is Under",
+                        "SCP pick is Spread only",
+                        "No clear SCP pick found",
+                    ] else 0
+                )
+                proof_url = st.text_input("Paste SCP article URL if found", value=str(existing.get("url", "")))
+                public_heavy = st.checkbox("Public-heavy risk / too many public sources on same side", value=bool(existing.get("public_heavy", False)))
+                notes = st.text_area("Notes", value=str(existing.get("notes", "")), height=100)
+
+                if st.button("Save public proof for this pick"):
+                    save_public_proof(key, {
+                        "checked": checked,
+                        "agreement": agreement,
+                        "url": proof_url,
+                        "public_heavy": public_heavy,
+                        "notes": notes,
+                        "saved_at": iso_z(datetime.now(timezone.utc)),
+                    })
+                    st.success("Public proof saved for this scan/session.")
+
+                st.markdown("#### Saved proof summary")
+                st.write(proof_summary_text(load_public_proofs().get(key, {})))
+
+                if public_heavy:
+                    st.warning("Public-heavy risk marked. Treat this as a red flag. Do not turn this into a real bet.")
+
+    with tabs[3]:
         st.subheader("🟢 Best Price Board")
         st.write("Use the NZ Bettor Board first. It includes all best-price board columns plus NZ/US time conversion.")
         st.caption("v3.3 keeps this tab as a simple explanation so the phone UI stays cleaner.")
 
-    with tabs[3]:
+    with tabs[4]:
         st.subheader("📒 Paper Log")
         df = load_log()
         if df.empty:
@@ -1259,7 +1378,7 @@ def main():
             st.dataframe(df, use_container_width=True)
             st.download_button("Download CSV", df.to_csv(index=False).encode("utf-8"), "goat_shield_paper_log.csv", "text/csv")
 
-    with tabs[4]:
+    with tabs[5]:
         st.subheader("✅ Results")
         df = load_log()
         if df.empty or "result" not in df.columns:
@@ -1285,7 +1404,7 @@ def main():
                     st.success("Saved.")
                     st.rerun()
 
-    with tabs[5]:
+    with tabs[6]:
         st.subheader("📊 Dashboard")
         df = load_log()
         if df.empty:
@@ -1311,7 +1430,7 @@ def main():
                 st.subheader("Performance by market")
                 st.dataframe(df.groupby("market", dropna=False).size().reset_index(name="paper_picks"), use_container_width=True)
 
-    with tabs[6]:
+    with tabs[7]:
         st.subheader("🛡️ Backup")
         df = load_log()
         if not df.empty:
@@ -1328,7 +1447,7 @@ def main():
                 st.error(f"Restore failed: {e}")
 
     st.divider()
-    st.caption("GOAT Shield Live v3.8 PINNACLE REF is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v3.9 PUBLIC PROOF is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":

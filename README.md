@@ -1,37 +1,28 @@
-# GOAT Shield Live v3.8 — Pinnacle Reference Board
+# GOAT Shield Live v3.9 — Public Pick Proof
 
-Adds Pinnacle reference odds to the GOAT Shield system.
+Adds Sports Chat Place manual proof support.
 
-## v3.8 upgrade
+## v3.9 upgrade
 
-- Pulls your normal board from selected regions, usually `us`.
-- Separately pulls Pinnacle reference odds using The Odds API bookmaker key `pinnacle`.
-- Matches Pinnacle to the same game + market + pick when available.
-- Adds:
-  - Pinnacle reference odds
-  - Pinnacle gap %
-  - Pinnacle status
-  - Pinnacle explanation in Mobile Cards
-  - Pinnacle fields in paper log
-- Keeps no-edge gate removed.
-- Keeps NZD decimal odds range.
-- Keeps NZ/US time conversion.
-- Keeps paper-only safety.
+- Adds 🧾 Public Pick Proof tab.
+- Generates Sports Chat Place sport-page and Google search links for the exact game/date.
+- Lets you manually record:
+  - Sports Chat Place checked
+  - SCP agrees / disagrees / over / under / unclear
+  - Proof URL
+  - Public-heavy risk
+  - Notes
+- Shows SCP proof status in Mobile Cards.
+- Adds proof summary into paper log when logging approved picks.
 
 ## Important
 
-Pinnacle is used as a reference line only. This app does not log into Pinnacle, scrape Pinnacle, or place bets.
+This does not scrape Sports Chat Place.
+This does not use SCP as the main decision maker.
+This does not auto-bet.
 
-## Suggested use
-
-- Pull Pinnacle reference odds: ON
-- Require Pinnacle confirmation: OFF at first
-- Sport preset: Single/manual
-- Sport: MLB only
-- Market: Moneyline / h2h only
-- Region: us
-- Time filter: NZ Bettor Mode: Next 24 hours
+Use Sports Chat Place as a manual proof/red-flag cross-check only.
 
 ## Safety
 
-Paper-only. No real-money betting. No sportsbook login. No scraping. No bank/card details.
+Paper-only. No sportsbook login. No scraping. No real-money betting.
