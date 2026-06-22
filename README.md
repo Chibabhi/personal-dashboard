@@ -1,10 +1,16 @@
-# GOAT Shield Live v3.7 — US National Sports Pack
+# GOAT Shield Live v3.7.1 — Fixed US National Sports Pack
 
-US National Sports Pack + NZD Decimal Odds + No Edge Gate + NZ Bettor Mode.
+This is the corrected v3.7 build.
 
-## v3.7 upgrade
+## Fix
 
-Adds sport presets:
+- Fixed KeyError for `min_decimal_odds`.
+- Keeps US National Sports Pack.
+- Keeps NZD decimal odds range.
+- Keeps no edge gate.
+- Keeps NZ Bettor Mode and mobile cards.
+
+## Sport presets
 
 - Single / manual
 - All US National Sports
@@ -12,36 +18,6 @@ Adds sport presets:
 - US Pro + MLS + WNBA
 - College Only
 
-All US National Sports includes active/available:
-
-- MLB
-- NBA
-- NFL
-- NHL
-- MLS
-- WNBA
-- NCAA Football
-- NCAA Basketball
-- NCAA Women's Basketball
-
-The app only selects sports The Odds API currently returns as active/available.
-
-## Still included
-
-- NZD decimal odds range, not edge.
-- Best bookmaker price compared with average book price.
-- NZ time + US Eastern time.
-- 90-minute time safety lock.
-- Mobile cards.
-- Paper log.
-- No real-money auto-betting.
-
-## Streamlit Secrets
-
-```toml
-ODDS_API_KEY = "your_real_key_here"
-```
-
 ## Safety
 
-Paper-only. No sportsbook login. No scraping. No bank/card details.
+Paper-only. No sportsbook login. No real-money auto-betting.
