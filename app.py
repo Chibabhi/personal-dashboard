@@ -28,8 +28,8 @@ NZ_TZ_NAME = "Pacific/Auckland"
 ET_TZ_NAME = "America/New_York"
 
 DEFAULT_RULES = {
-    "min_decimal_odds": 1.40,
-    "max_decimal_odds": 2.20,
+    "min_odds": 1.40,
+    "max_odds": 2.20,
     "min_books_compared": 5,
     "max_daily": 3,
     "lock_losses": 3,
@@ -46,9 +46,23 @@ FALLBACK_SPORTS = {
     "basketball_nba": "NBA",
     "icehockey_nhl": "NHL",
     "americanfootball_nfl": "NFL",
-    "soccer_epl": "EPL",
-    "aussierules_afl": "AFL",
-    "rugbyleague_nrl": "NRL",
+    "soccer_usa_mls": "MLS",
+    "basketball_wnba": "WNBA",
+    "americanfootball_ncaaf": "NCAAF",
+    "basketball_ncaab": "NCAAB",
+    "basketball_ncaawb": "NCAAWB",
+}
+
+US_NATIONAL_SPORTS_PACK = {
+    "baseball_mlb": "MLB",
+    "basketball_nba": "NBA",
+    "americanfootball_nfl": "NFL",
+    "icehockey_nhl": "NHL",
+    "soccer_usa_mls": "MLS",
+    "basketball_wnba": "WNBA",
+    "americanfootball_ncaaf": "NCAA Football",
+    "basketball_ncaab": "NCAA Basketball",
+    "basketball_ncaawb": "NCAA Women's Basketball",
 }
 
 PINNACLE_HINTS = ("pinnacle",)
@@ -60,7 +74,7 @@ BET365_HINTS = ("bet365",)
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v3.6",
+    page_title="GOAT Shield Live v3.7",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -382,6 +396,26 @@ def no_vig_probs(event_rows: List[Dict[str, Any]]) -> Dict[Tuple[str, str, Optio
             key = (r["market"], r["outcome"], r["point"])
             probs[key].append(inv / s)
     return {k: sum(v) / len(v) for k, v in probs.items() if v}
+
+
+def active_us_national_sports(sports_map: Dict[str, str]) -> List[str]:
+    """Return only US sports currently active/available from The Odds API."""
+    return [k for k in US_NATIONAL_SPORTS_PACK.keys() if k in sports_map]
+
+
+def default_us_sport_selection(sports_map: Dict[str, str], mode: str) -> List[str]:
+    active_us = active_us_national_sports(sports_map)
+    if not active_us:
+        return ["baseball_mlb"] if "baseball_mlb" in sports_map else list(sports_map.keys())[:1]
+    if mode == "All US National Sports":
+        return active_us
+    if mode == "Big 4 Pro Only":
+        return [k for k in ["baseball_mlb", "basketball_nba", "americanfootball_nfl", "icehockey_nhl"] if k in sports_map]
+    if mode == "US Pro + MLS + WNBA":
+        return [k for k in ["baseball_mlb", "basketball_nba", "americanfootball_nfl", "icehockey_nhl", "soccer_usa_mls", "basketball_wnba"] if k in sports_map]
+    if mode == "College Only":
+        return [k for k in ["americanfootball_ncaaf", "basketball_ncaab", "basketball_ncaawb"] if k in sports_map]
+    return ["baseball_mlb"] if "baseball_mlb" in sports_map else active_us[:1]
 
 
 def build_candidates(events: List[Dict[str, Any]], selected_markets: List[str], min_minutes_before_start: int) -> List[Dict[str, Any]]:
@@ -776,8 +810,8 @@ def loss_streak_count(df):
 # UI
 # =========================================================
 def main():
-    st.title("🐐 GOAT Shield Live v3.6")
-    st.caption("NZD Decimal Odds + No Edge Gate + NZ Bettor Mode + Best Price Board. Paper-only. No sportsbook login. No real-money auto-betting.")
+    st.title("🐐 GOAT Shield Live v3.7")
+    st.caption("US National Sports Pack + NZD Decimal Odds + No Edge Gate + NZ Bettor Mode. Paper-only. No sportsbook login. No real-money auto-betting.")
 
     api_key_default = secret("ODDS_API_KEY", "")
 
@@ -796,14 +830,34 @@ def main():
 
         sports_map = get_sports_map(api_key)
         sport_keys = list(sports_map.keys())
-        default_sport = "baseball_mlb" if "baseball_mlb" in sport_keys else sport_keys[0]
+
+        sport_preset = st.selectbox(
+            "Sport preset",
+            [
+                "Single / manual",
+                "All US National Sports",
+                "Big 4 Pro Only",
+                "US Pro + MLS + WNBA",
+                "College Only",
+            ],
+            index=0,
+            help="All US National Sports includes active MLB, NBA, NFL, NHL, MLS, WNBA, NCAA Football, NCAA Basketball, and NCAA Women's Basketball when available from The Odds API.",
+        )
+
+        default_sports = default_us_sport_selection(sports_map, sport_preset)
 
         selected_sports = st.multiselect(
             "Active sports to scan",
             sport_keys,
-            default=[default_sport],
-            format_func=lambda k: sports_map.get(k, k),
+            default=default_sports,
+            format_func=lambda k: sports_map.get(k, US_NATIONAL_SPORTS_PACK.get(k, k)),
         )
+
+        active_us_now = active_us_national_sports(sports_map)
+        if sport_preset != "Single / manual":
+            st.caption(f"Selected {len(selected_sports)} active US sports. API only returns sports currently available/active.")
+        else:
+            st.caption(f"US sports currently available: {', '.join([sports_map.get(k, k) for k in active_us_now]) if active_us_now else 'none found yet'}")
 
         markets = st.multiselect(
             "Markets",
@@ -834,6 +888,8 @@ def main():
 
         est = max(1, len(selected_sports)) * max(1, len(markets)) * (1 if bookmakers_filter.strip() else max(1, len(regions)))
         st.caption(f"Estimated credits/fetch: about {est}. Start small.")
+        if len(selected_sports) > 3 or len(markets) > 1:
+            st.warning("Credit warning: multiple sports/markets can use API credits fast. Use h2h only first, then add spreads/totals later.")
 
         st.markdown("### GOAT rules — no edge gate")
         rules = dict(DEFAULT_RULES)
@@ -1127,7 +1183,7 @@ def main():
                 st.error(f"Restore failed: {e}")
 
     st.divider()
-    st.caption("GOAT Shield Live v3.6 is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v3.7 is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":

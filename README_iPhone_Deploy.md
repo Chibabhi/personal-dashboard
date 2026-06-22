@@ -1,4 +1,4 @@
-# iPhone install guide — v3.6
+# iPhone install guide — v3.7 US National Sports Pack
 
 Upload/replace these files in GitHub:
 
@@ -12,18 +12,19 @@ Then:
 1. Commit changes.
 2. Streamlit > Manage app > Reboot app.
 3. Open app.
-4. You should see: GOAT Shield Live v3.6
+4. You should see: GOAT Shield Live v3.7
 
-Best first settings:
-- Active sports: MLB only
-- Markets: Moneyline / h2h only
-- Regions: us only
+Recommended safe first test:
+- Sport preset: Single / manual
+- Sport: MLB only
+- Market: Moneyline / h2h only
+- Region: us
 - Time filter: NZ Bettor Mode: Next 24 hours
-- Lock if game starts within minutes: 90
-- Min NZD decimal odds: 1.40
-- Max NZD decimal odds: 2.20
-- Minimum bookmakers compared: 5
-- Require home team: ON
-- Require home favourite: ON
-- Require Pinnacle value: OFF
-- Red flags: OFF unless genuinely true
+
+Then test:
+- Sport preset: Big 4 Pro Only
+- Market: Moneyline / h2h only
+
+Use All US National Sports only when you are happy with API credit usage.
+
+Do not scan all sports + all markets repeatedly because it can burn credits fast.

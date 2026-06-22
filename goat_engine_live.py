@@ -1,5 +1,5 @@
 """
-GOAT Shield Live v3.6
+GOAT Shield Live v3.7
 Engine is embedded in app.py. This placeholder prevents old import/cache issues.
 """
-VERSION = "v3.6"
+VERSION = "v3.7"
