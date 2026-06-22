@@ -77,7 +77,7 @@ BET365_HINTS = ("bet365",)
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v3.9.2 MULTI PROOF",
+    page_title="GOAT Shield Live v4.0 3-SOURCE ALIGNMENT",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -1021,36 +1021,130 @@ def picks_and_parlays_links(row: Dict[str, Any]) -> Dict[str, str]:
 
 
 
-def proof_summary_text(proof: Dict[str, Any]) -> str:
-    if not proof:
-        return "Public proof: not checked"
+def agreement_bucket(value: str) -> str:
+    """Classify each public/source proof result into exact, lean, conflict, neutral, or missing."""
+    v = str(value or "Not set").lower()
+    if v in ("not set", ""):
+        return "missing"
+    if "opposite" in v or "disagree" in v:
+        return "conflict"
+    if "same team ml" in v or "agrees" in v or "candidate" in v:
+        return "exact"
+    if "spread" in v or "-1.5" in v or "run line" in v:
+        return "lean"
+    if "over" in v or "under" in v or "parlay" in v:
+        return "neutral"
+    if "no clear" in v:
+        return "neutral"
+    return "neutral"
 
-    # Backward compatible with v3.9/v3.9.1 saved SCP-only proofs.
+
+def source_agrees(value: str) -> bool:
+    return agreement_bucket(value) in ("exact", "lean")
+
+
+def source_conflicts(value: str) -> bool:
+    return agreement_bucket(value) == "conflict"
+
+
+def alignment_status(proof: Dict[str, Any]) -> str:
+    if not proof:
+        return "NOT CHECKED"
+
+    sa_checked = bool(proof.get("sa_checked", False))
+    sa_home_fav = bool(proof.get("sa_home_favourite", False))
+    sa_win_pct = safe_float(proof.get("sa_win_pct", 0), 0)
+    sa_pick = proof.get("sa_pick_agreement", "Not set")
+
     scp_checked = bool(proof.get("scp_checked", proof.get("checked", False)))
     scp_agreement = proof.get("scp_agreement", proof.get("agreement", "Not set"))
+
     pp_checked = bool(proof.get("pp_checked", False))
     pp_agreement = proof.get("pp_agreement", "Not set")
 
-    public = "PUBLIC-HEAVY RISK" if proof.get("public_heavy") else "no public-heavy risk marked"
+    threshold = safe_float(proof.get("sa_win_threshold", 60), 60)
+
+    has_conflict = (
+        bool(proof.get("public_heavy", False))
+        or source_conflicts(sa_pick)
+        or source_conflicts(scp_agreement)
+        or source_conflicts(pp_agreement)
+    )
+
+    sports_alerts_ok = (
+        sa_checked
+        and sa_home_fav
+        and sa_win_pct >= threshold
+        and source_agrees(sa_pick)
+    )
+
+    scp_ok = scp_checked and source_agrees(scp_agreement)
+    pp_ok = pp_checked and source_agrees(pp_agreement)
+
+    if has_conflict:
+        return "REJECT — SOURCE CONFLICT"
+    if sports_alerts_ok and scp_ok and pp_ok:
+        return "FULL GOAT ALIGNMENT"
+    if sports_alerts_ok and (scp_ok or pp_ok):
+        return "PARTIAL ALIGNMENT"
+    if sports_alerts_ok:
+        return "SPORTS ALERTS ONLY — WATCHLIST"
+    return "WATCHLIST ONLY"
+
+
+def parlay_leg_status(proof: Dict[str, Any]) -> str:
+    status = alignment_status(proof)
+    if status == "FULL GOAT ALIGNMENT":
+        return "PARLAY LEG ELIGIBLE — paper only, max 2 legs"
+    return "NOT PARLAY ELIGIBLE"
+
+
+def proof_summary_text(proof: Dict[str, Any]) -> str:
+    if not proof:
+        return "3-source alignment: not checked"
+
+    # Backward compatible with v3.9/v3.9.1 saved SCP-only proofs.
+    sa_checked = bool(proof.get("sa_checked", False))
+    sa_home_fav = bool(proof.get("sa_home_favourite", False))
+    sa_win_pct = proof.get("sa_win_pct", "")
+    sa_pick = proof.get("sa_pick_agreement", "Not set")
+
+    scp_checked = bool(proof.get("scp_checked", proof.get("checked", False)))
+    scp_agreement = proof.get("scp_agreement", proof.get("agreement", "Not set"))
+
+    pp_checked = bool(proof.get("pp_checked", False))
+    pp_agreement = proof.get("pp_agreement", "Not set")
+
+    status = alignment_status(proof)
+    parlay_status = parlay_leg_status(proof)
+    public = "PUBLIC-HEAVY RISK" if proof.get("public_heavy") else "no public-heavy risk"
+
+    sa_text = f"Sports Alerts: {'checked' if sa_checked else 'not checked'} | home fav: {'yes' if sa_home_fav else 'no'} | win%: {sa_win_pct} | {sa_pick}"
     scp_text = f"SCP: {'checked' if scp_checked else 'not checked'} | {scp_agreement}"
     pp_text = f"Picks & Parlays: {'checked' if pp_checked else 'not checked'} | {pp_agreement}"
-    return f"{scp_text} || {pp_text} || {public}"
+
+    return f"{status} || {sa_text} || {scp_text} || {pp_text} || {public} || {parlay_status}"
 
 
 def render_public_proof_badge(row: Dict[str, Any]) -> None:
     proof = get_public_proof(row)
     summary = proof_summary_text(proof)
-    if proof.get("public_heavy"):
+    status = alignment_status(proof)
+    if status.startswith("REJECT"):
+        st.error(summary)
+    elif status == "FULL GOAT ALIGNMENT":
+        st.success(summary)
+    elif "PARTIAL" in status or "SPORTS ALERTS ONLY" in status:
         st.warning(summary)
-    elif proof.get("checked"):
+    elif proof:
         st.info(summary)
     else:
         st.caption(summary)
 
 
 def main():
-    st.title("🐐 GOAT Shield Live v3.9.2 MULTI PROOF")
-    st.caption("Sports Chat Place + Picks and Parlays proof links + Pinnacle reference + NZD Decimal Odds + NZ Bettor Mode. Paper-only. No sportsbook login. No scraping.")
+    st.title("🐐 GOAT Shield Live v4.0 3-SOURCE ALIGNMENT")
+    st.caption("Sports Alerts + Sports Chat Place + Picks & Parlays alignment mode. Pinnacle reference + NZD Decimal Odds + NZ Bettor Mode. Paper-only.")
 
     api_key_default = secret("ODDS_API_KEY", "")
 
@@ -1185,7 +1279,7 @@ def main():
 
     log_df = load_log()
 
-    tabs = st.tabs(["🇳🇿 NZ Bettor Board", "📱 Mobile Cards", "🧾 Public Pick Proof", "🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "🛡️ Backup"])
+    tabs = st.tabs(["🇳🇿 NZ Bettor Board", "📱 Mobile Cards", "🧠 3-Source Alignment", "🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "🛡️ Backup"])
 
     with tabs[0]:
         st.subheader("🇳🇿 NZ Bettor Board")
@@ -1344,7 +1438,7 @@ def main():
                             "score": chosen["score"],
                             "plain_explanation": chosen.get("plain_explanation", ""),
                             "score_parts": chosen.get("score_parts", ""),
-                            "scp_proof_summary": proof_summary_text(get_public_proof(chosen)),
+                            "three_source_alignment": proof_summary_text(get_public_proof(chosen)),
                             "result": "Pending",
                             "profit_units": "",
                             "closing_odds": "",
@@ -1390,8 +1484,8 @@ def main():
                         render_candidate_card(card_row.to_dict(), n)
 
     with tabs[2]:
-        st.subheader("🧾 Public Pick Proof")
-        st.info("Use this to manually check Sports Chat Place and Picks & Parlays free-pick pages for the same game/date. This does not scrape either site and does not make public-pick sites the main decision maker.")
+        st.subheader("🧠 3-Source Alignment")
+        st.info("Use this exactly like your manual system: Sports Alerts first, then Sports Chat Place, then Picks & Parlays. This does not scrape public-pick sites and does not make them the main decision maker.")
 
         events_proof = st.session_state.get("events_v36", [])
         last_markets_proof = st.session_state.get("markets_v36", markets)
@@ -1454,22 +1548,62 @@ def main():
                 for label, url in picks_and_parlays_links(chosen).items():
                     st.link_button(label, url)
 
-                st.markdown("#### Manual proof result")
+                st.markdown("#### Manual 3-source alignment")
                 key = proof_key(chosen)
                 existing = load_public_proofs().get(key, {})
 
                 agreement_options = [
-                        "Not set",
-                        "Agrees with our candidate",
-                        "Disagrees / opposite side",
-                        "Pick is Over",
-                        "Pick is Under",
-                        "Pick is Spread only",
-                        "Pick is Parlay only",
-                        "No clear pick found",
-                    ]
+                    "Not set",
+                    "Same team ML / candidate agrees",
+                    "Same team spread / -1.5 / run line lean",
+                    "Disagrees / opposite side",
+                    "Pick is Over",
+                    "Pick is Under",
+                    "Pick is Parlay only",
+                    "No clear pick found",
+                ]
 
-                st.markdown("##### Sports Chat Place")
+                st.markdown("##### 1) Sports Alerts")
+                st.caption("This is your first filter: game today, home favourite, high win %, acceptable odds.")
+
+                sa_checked = st.checkbox(
+                    "Sports Alerts checked for this exact game/date",
+                    value=bool(existing.get("sa_checked", False)),
+                )
+                st.write(f"App candidate home pick: {'YES' if chosen.get('home_pick') else 'NO'} | App home favourite: {'YES' if chosen.get('home_fav') else 'NO'}")
+                sa_home_favourite = st.checkbox(
+                    "Sports Alerts says this team is home favourite",
+                    value=bool(existing.get("sa_home_favourite", bool(chosen.get("home_fav", False)))),
+                )
+                sa_win_pct = st.number_input(
+                    "Sports Alerts win percentage",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(existing.get("sa_win_pct", 0.0) or 0.0),
+                    step=1.0,
+                )
+                sa_win_threshold = st.number_input(
+                    "Minimum win % required",
+                    min_value=50.0,
+                    max_value=90.0,
+                    value=float(existing.get("sa_win_threshold", 60.0) or 60.0),
+                    step=1.0,
+                )
+                sa_odds = st.number_input(
+                    "Sports Alerts decimal odds shown",
+                    min_value=0.0,
+                    max_value=20.0,
+                    value=float(existing.get("sa_odds", 0.0) or 0.0),
+                    step=0.01,
+                )
+                sa_existing = existing.get("sa_pick_agreement", "Not set")
+                sa_pick_agreement = st.selectbox(
+                    "Sports Alerts pick compared with our candidate",
+                    agreement_options,
+                    index=agreement_options.index(sa_existing) if sa_existing in agreement_options else 0,
+                )
+
+                st.markdown("##### 2) Sports Chat Place")
                 scp_checked = st.checkbox(
                     "Sports Chat Place checked for this exact game/date",
                     value=bool(existing.get("scp_checked", existing.get("checked", False))),
@@ -1482,7 +1616,7 @@ def main():
                 )
                 scp_url = st.text_input("Paste Sports Chat Place article URL if found", value=str(existing.get("scp_url", existing.get("url", ""))))
 
-                st.markdown("##### Picks & Parlays")
+                st.markdown("##### 3) Picks & Parlays")
                 pp_checked = st.checkbox(
                     "Picks & Parlays checked for this exact game/date",
                     value=bool(existing.get("pp_checked", False)),
@@ -1498,21 +1632,40 @@ def main():
                 public_heavy = st.checkbox("Public-heavy risk / too many public sources on same side", value=bool(existing.get("public_heavy", False)))
                 notes = st.text_area("Notes", value=str(existing.get("notes", "")), height=100)
 
-                if st.button("Save public proof for this pick"):
-                    save_public_proof(key, {
-                        "scp_checked": scp_checked,
-                        "scp_agreement": scp_agreement,
-                        "scp_url": scp_url,
-                        "pp_checked": pp_checked,
-                        "pp_agreement": pp_agreement,
-                        "pp_url": pp_url,
-                        "public_heavy": public_heavy,
-                        "notes": notes,
-                        "saved_at": iso_z(datetime.now(timezone.utc)),
-                    })
-                    st.success("Public proof saved for this scan/session.")
+                preview_proof = {
+                    "sa_checked": sa_checked,
+                    "sa_home_favourite": sa_home_favourite,
+                    "sa_win_pct": sa_win_pct,
+                    "sa_win_threshold": sa_win_threshold,
+                    "sa_odds": sa_odds,
+                    "sa_pick_agreement": sa_pick_agreement,
+                    "scp_checked": scp_checked,
+                    "scp_agreement": scp_agreement,
+                    "scp_url": scp_url,
+                    "pp_checked": pp_checked,
+                    "pp_agreement": pp_agreement,
+                    "pp_url": pp_url,
+                    "public_heavy": public_heavy,
+                    "notes": notes,
+                }
 
-                st.markdown("#### Saved proof summary")
+                st.markdown("#### Alignment verdict preview")
+                preview_status = alignment_status(preview_proof)
+                if preview_status == "FULL GOAT ALIGNMENT":
+                    st.success(proof_summary_text(preview_proof))
+                elif preview_status.startswith("REJECT"):
+                    st.error(proof_summary_text(preview_proof))
+                elif "PARTIAL" in preview_status or "SPORTS ALERTS ONLY" in preview_status:
+                    st.warning(proof_summary_text(preview_proof))
+                else:
+                    st.info(proof_summary_text(preview_proof))
+
+                if st.button("Save 3-source alignment for this pick"):
+                    preview_proof["saved_at"] = iso_z(datetime.now(timezone.utc))
+                    save_public_proof(key, preview_proof)
+                    st.success("3-source alignment saved for this scan/session.")
+
+                st.markdown("#### Saved alignment summary")
                 st.write(proof_summary_text(load_public_proofs().get(key, {})))
 
                 if public_heavy:
@@ -1601,7 +1754,7 @@ def main():
                 st.error(f"Restore failed: {e}")
 
     st.divider()
-    st.caption("GOAT Shield Live v3.9.2 MULTI PROOF is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v4.0 3-SOURCE ALIGNMENT is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":

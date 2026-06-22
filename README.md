@@ -1,26 +1,40 @@
-# GOAT Shield Live v3.9.2 — Multi Public Proof
+# GOAT Shield Live v4.0 — 3-Source Alignment Mode
 
-Adds Picks & Parlays manual proof support alongside Sports Chat Place.
+This version matches Abhi's manual operating style:
 
-## v3.9.2 upgrade
+1. Sports Alerts
+2. Sports Chat Place
+3. Picks & Parlays
 
-- Public Pick Proof now includes:
-  - Sports Chat Place links
-  - Picks & Parlays links
-  - Separate checkboxes and result dropdowns for both sources
-  - Separate article URL fields
-  - Shared public-heavy risk flag
-  - Shared notes field
-- Mobile Cards show combined public proof summary.
-- Paper Log stores combined proof summary when logging a paper pick.
+## New v4.0 features
+
+- New 🧠 3-Source Alignment tab.
+- Sports Alerts manual input:
+  - checked yes/no
+  - home favourite yes/no
+  - win percentage
+  - minimum win percentage threshold
+  - odds shown
+  - pick compared with candidate
+- Sports Chat Place result compared with candidate.
+- Picks & Parlays result compared with candidate.
+- Automatic alignment verdict:
+  - FULL GOAT ALIGNMENT
+  - PARTIAL ALIGNMENT
+  - SPORTS ALERTS ONLY — WATCHLIST
+  - WATCHLIST ONLY
+  - REJECT — SOURCE CONFLICT
+- Parlay leg status:
+  - PARLAY LEG ELIGIBLE — paper only, max 2 legs
+  - NOT PARLAY ELIGIBLE
+- Mobile Cards show the saved alignment badge.
+- Paper Log stores the 3-source alignment summary.
 
 ## Important
 
-This does not scrape Sports Chat Place or Picks & Parlays.
-It only gives safe manual proof links and lets you record what you checked.
+This still does not scrape any public-pick site.
+It does not log into sportsbooks.
+It does not auto-bet.
+It is for paper proof only.
 
-Use public-pick sites as cross-checks only, not as the main decision maker.
-
-## Safety
-
-Paper-only. No sportsbook login. No scraping. No real-money betting.
+Use it as a strict filter, not a reason to bet more.

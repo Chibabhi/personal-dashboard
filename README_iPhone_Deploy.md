@@ -1,4 +1,4 @@
-# iPhone install guide — v3.9.2 Multi Public Proof
+# iPhone install guide — v4.0 3-Source Alignment
 
 Unzip first. Do not upload only the ZIP to GitHub.
 
@@ -16,13 +16,14 @@ Then:
 3. If old version stays, clear cache/reboot.
 
 Success title:
-GOAT Shield Live v3.9.2 MULTI PROOF
+GOAT Shield Live v4.0 3-SOURCE ALIGNMENT
 
 How to use:
 1. Run NZ Bettor Board.
-2. Open Public Pick Proof.
-3. Select game/pick.
-4. Check Sports Chat Place links.
-5. Check Picks & Parlays links.
-6. Save proof.
-7. Log paper pick only.
+2. Open 🧠 3-Source Alignment.
+3. Select a pick/game.
+4. Fill Sports Alerts fields.
+5. Check Sports Chat Place.
+6. Check Picks & Parlays.
+7. Save 3-source alignment.
+8. Only paper-log picks. No real money.

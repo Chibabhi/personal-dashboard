@@ -1,5 +1,5 @@
 """
-GOAT Shield Live v3.9.2 MULTI PROOF
+GOAT Shield Live v4.0 3-SOURCE ALIGNMENT
 Engine is embedded in app.py. This placeholder prevents old import/cache issues.
 """
-VERSION = "v3.9.2-multi-proof"
+VERSION = "v4.0-3-source-alignment"
