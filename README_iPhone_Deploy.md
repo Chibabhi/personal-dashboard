@@ -1,4 +1,4 @@
-# iPhone install guide — v4.1 Auto Verify
+# iPhone install guide — v4.2 Alignment Lock
 
 Unzip first. Do not upload only the ZIP to GitHub.
 
@@ -16,11 +16,12 @@ Then:
 3. If old version stays, clear cache/reboot.
 
 Success title:
-GOAT Shield Live v4.1 AUTO VERIFY
+GOAT Shield Live v4.2 ALIGNMENT LOCK
 
 How to use:
 1. Run NZ Bettor Board.
 2. Wait 30–60 seconds.
-3. Press Fetch again.
-4. Open 🛡️ Auto Verify.
-5. Paper-log only HIGH confidence picks.
+3. Fetch again.
+4. Open Auto Verify.
+5. Open Alignment Lock.
+6. Only paper-log unlocked picks.

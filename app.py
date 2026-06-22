@@ -47,6 +47,10 @@ DEFAULT_RULES = {
     "min_data_confidence_score": 75,
     "max_stale_seconds": 180,
     "max_line_move_pct": 3.0,
+    "alignment_lock_mode": True,
+    "require_high_confidence_to_log": True,
+    "allow_full_alignment_override": True,
+    "allow_partial_alignment_watchlist_log": False,
 }
 
 FALLBACK_SPORTS = {
@@ -82,7 +86,7 @@ BET365_HINTS = ("bet365",)
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v4.1 AUTO VERIFY",
+    page_title="GOAT Shield Live v4.2 ALIGNMENT LOCK",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -860,6 +864,13 @@ def render_candidate_card(row: dict, idx: int):
         else:
             st.success("Auto Verify passed: " + str(row.get("data_confidence_passed", "High confidence")))
 
+        lock_status = str(row.get("log_lock_status", "LOCK STATUS UNKNOWN"))
+        lock_reason = str(row.get("log_lock_reason", ""))
+        if bool(row.get("paper_log_allowed", False)):
+            st.success(f"**Alignment Lock:** {lock_status} — {lock_reason}")
+        else:
+            st.error(f"**Alignment Lock:** {lock_status} — {lock_reason}")
+
         st.markdown(f"**Time:** {status} • starts in **{starts_in}**")
         st.markdown(f"**NZ:** {start_nz}")
         st.markdown(f"**US ET:** {start_et}")
@@ -1087,6 +1098,111 @@ def auto_verify_summary(board: pd.DataFrame) -> Dict[str, Any]:
         "MEDIUM": int(counts.get("MEDIUM", 0)),
         "LOW": int(counts.get("LOW", 0)),
     }
+
+
+# =========================================================
+# ALIGNMENT LOCK — v4.2
+# =========================================================
+def log_lock_evaluation(row: Dict[str, Any], rules: Dict[str, Any]) -> Dict[str, Any]:
+    """Final paper-log gate. Prevents logging weak picks even if they appear approved."""
+    if not rules.get("alignment_lock_mode", True):
+        return {
+            "paper_log_allowed": True,
+            "log_lock_status": "UNLOCKED — ALIGNMENT LOCK OFF",
+            "log_lock_reason": "Alignment Lock is turned off.",
+            "alignment_status_saved": alignment_status(get_public_proof(row)),
+            "parlay_leg_status_saved": parlay_leg_status(get_public_proof(row)),
+        }
+
+    proof = get_public_proof(row)
+    align = alignment_status(proof)
+    parlay_status = parlay_leg_status(proof)
+    conf = str(row.get("data_confidence", "")).upper()
+    conf_score = int(safe_float(row.get("data_confidence_score", 0), 0))
+    decision = str(row.get("decision", ""))
+
+    # Source conflict always blocks. This is non-negotiable.
+    if align.startswith("REJECT"):
+        return {
+            "paper_log_allowed": False,
+            "log_lock_status": "LOCKED — SOURCE CONFLICT",
+            "log_lock_reason": f"Saved 3-source alignment says: {align}. Do not paper-log.",
+            "alignment_status_saved": align,
+            "parlay_leg_status_saved": parlay_status,
+        }
+
+    # Only approved/elite rows can be logged through normal paper-log.
+    if not ("APPROVED" in decision or "ELITE" in decision):
+        return {
+            "paper_log_allowed": False,
+            "log_lock_status": "LOCKED — NOT APPROVED",
+            "log_lock_reason": f"Decision is {decision}. Only approved/elite candidates can be paper-logged.",
+            "alignment_status_saved": align,
+            "parlay_leg_status_saved": parlay_status,
+        }
+
+    # Main automatic route: high confidence market data.
+    if rules.get("require_high_confidence_to_log", True) and conf == "HIGH":
+        return {
+            "paper_log_allowed": True,
+            "log_lock_status": "UNLOCKED — HIGH AUTO VERIFY",
+            "log_lock_reason": f"Auto Verify is HIGH confidence ({conf_score}/100). Paper-log allowed.",
+            "alignment_status_saved": align,
+            "parlay_leg_status_saved": parlay_status,
+        }
+
+    # Manual proof route: full alignment can override non-high confidence.
+    if rules.get("allow_full_alignment_override", True) and align == "FULL GOAT ALIGNMENT":
+        return {
+            "paper_log_allowed": True,
+            "log_lock_status": "UNLOCKED — FULL GOAT ALIGNMENT",
+            "log_lock_reason": "Saved 3-source proof has FULL GOAT ALIGNMENT. Paper-log allowed.",
+            "alignment_status_saved": align,
+            "parlay_leg_status_saved": parlay_status,
+        }
+
+    # Optional watchlist route; default OFF.
+    if rules.get("allow_partial_alignment_watchlist_log", False) and align == "PARTIAL ALIGNMENT":
+        return {
+            "paper_log_allowed": True,
+            "log_lock_status": "UNLOCKED — PARTIAL WATCHLIST LOG",
+            "log_lock_reason": "Partial alignment saved. This is a watchlist paper-log only, not a strong pick.",
+            "alignment_status_saved": align,
+            "parlay_leg_status_saved": parlay_status,
+        }
+
+    reason_bits = []
+    if conf != "HIGH":
+        reason_bits.append(f"Auto Verify is {conf or 'UNKNOWN'} ({conf_score}/100), not HIGH")
+    if align != "FULL GOAT ALIGNMENT":
+        reason_bits.append(f"3-source alignment is {align}")
+    if not reason_bits:
+        reason_bits.append("Alignment Lock did not find a valid unlock condition")
+
+    return {
+        "paper_log_allowed": False,
+        "log_lock_status": "LOCKED — NEED HIGH CONFIDENCE OR FULL ALIGNMENT",
+        "log_lock_reason": " | ".join(reason_bits),
+        "alignment_status_saved": align,
+        "parlay_leg_status_saved": parlay_status,
+    }
+
+
+def apply_alignment_lock_to_rows(rows: List[Dict[str, Any]], rules: Dict[str, Any]) -> List[Dict[str, Any]]:
+    out = []
+    for row in rows:
+        r = dict(row)
+        lock = log_lock_evaluation(r, rules)
+        r.update(lock)
+        out.append(r)
+    return out
+
+
+def alignment_lock_summary(board: pd.DataFrame) -> Dict[str, int]:
+    if board.empty or "paper_log_allowed" not in board.columns:
+        return {"UNLOCKED": 0, "LOCKED": 0}
+    unlocked = int(board["paper_log_allowed"].fillna(False).astype(bool).sum())
+    return {"UNLOCKED": unlocked, "LOCKED": int(len(board) - unlocked)}
 
 
 # =========================================================
@@ -1374,8 +1490,8 @@ def render_public_proof_badge(row: Dict[str, Any]) -> None:
 
 
 def main():
-    st.title("🐐 GOAT Shield Live v4.1 AUTO VERIFY")
-    st.caption("Auto Verify + Data Confidence Mode. Odds API + Pinnacle reference + market-implied win % + NZ Bettor Mode. Paper-only.")
+    st.title("🐐 GOAT Shield Live v4.2 ALIGNMENT LOCK")
+    st.caption("Alignment Lock + Auto Verify. Only HIGH-confidence or FULL GOAT Alignment can be paper-logged. Paper-only.")
 
     api_key_default = secret("ODDS_API_KEY", "")
 
@@ -1486,6 +1602,10 @@ def main():
         rules.setdefault("min_data_confidence_score", 75)
         rules.setdefault("max_stale_seconds", 180)
         rules.setdefault("max_line_move_pct", 3.0)
+        rules.setdefault("alignment_lock_mode", True)
+        rules.setdefault("require_high_confidence_to_log", True)
+        rules.setdefault("allow_full_alignment_override", True)
+        rules.setdefault("allow_partial_alignment_watchlist_log", False)
         rules["min_decimal_odds"] = st.number_input("Min NZD decimal odds", 1.01, 10.0, float(rules["min_decimal_odds"]), 0.01)
         rules["max_decimal_odds"] = st.number_input("Max NZD decimal odds", 1.01, 10.0, float(rules["max_decimal_odds"]), 0.01)
         rules["min_books_compared"] = st.number_input("Minimum bookmakers compared", 1, 20, int(rules["min_books_compared"]), 1)
@@ -1536,6 +1656,26 @@ def main():
         )
         st.caption("For best verification, press Fetch twice 30–60 seconds apart and compare line movement.")
 
+        st.markdown("### Alignment Lock")
+        rules["alignment_lock_mode"] = st.checkbox(
+            "Alignment Lock for paper-log",
+            bool(rules.get("alignment_lock_mode", True)),
+            help="Stops paper logging unless the pick has HIGH Auto Verify or saved FULL GOAT Alignment.",
+        )
+        rules["require_high_confidence_to_log"] = st.checkbox(
+            "Unlock paper-log with HIGH Auto Verify",
+            bool(rules.get("require_high_confidence_to_log", True)),
+        )
+        rules["allow_full_alignment_override"] = st.checkbox(
+            "Unlock paper-log with FULL GOAT Alignment",
+            bool(rules.get("allow_full_alignment_override", True)),
+        )
+        rules["allow_partial_alignment_watchlist_log"] = st.checkbox(
+            "Allow PARTIAL alignment watchlist logs",
+            bool(rules.get("allow_partial_alignment_watchlist_log", False)),
+            help="Default OFF. Keep this off unless you only want to test weak watchlist picks on paper.",
+        )
+
         st.markdown("### Manual red flags")
         flags = {
             "injury_red": st.checkbox("Injury/news red flag", False),
@@ -1548,7 +1688,7 @@ def main():
 
     log_df = load_log()
 
-    tabs = st.tabs(["🇳🇿 NZ Bettor Board", "📱 Mobile Cards", "🛡️ Auto Verify", "🧠 3-Source Alignment", "🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "🛡️ Backup"])
+    tabs = st.tabs(["🇳🇿 NZ Bettor Board", "📱 Mobile Cards", "🛡️ Auto Verify", "🔒 Alignment Lock", "🧠 3-Source Alignment", "🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "🛡️ Backup"])
 
     with tabs[0]:
         st.subheader("🇳🇿 NZ Bettor Board")
@@ -1626,6 +1766,7 @@ def main():
                 rows.append(r)
 
             rows = apply_auto_verify_to_rows(rows, rules, update_snapshot=True)
+            rows = apply_alignment_lock_to_rows(rows, rules)
 
             if not rows:
                 st.warning("No price candidates found. Try another sport, market, region, or time filter.")
@@ -1647,7 +1788,11 @@ def main():
                 v2.metric("MEDIUM", conf_counts.get("MEDIUM", 0))
                 v3.metric("LOW", conf_counts.get("LOW", 0))
                 v4.metric("Last fetch NZ", fmt_dt(parse_api_datetime(st.session_state.get("last_fetch_utc_v41", "")), NZ_TZ, "NZ") if st.session_state.get("last_fetch_utc_v41") else "—")
-                st.caption("Sources: The Odds API market odds + The Odds API Pinnacle reference + internal implied probability, home favourite, freshness, and line-movement checks.")
+                lock_counts = alignment_lock_summary(pd.DataFrame(rows))
+                l1, l2 = st.columns(2)
+                l1.metric("Paper-log unlocked", lock_counts.get("UNLOCKED", 0))
+                l2.metric("Paper-log locked", lock_counts.get("LOCKED", 0))
+                st.caption("Sources: The Odds API market odds + The Odds API Pinnacle reference + internal implied probability, home favourite, freshness, and line-movement checks. Alignment Lock controls paper logging.")
 
                 if approved_n == 0:
                     text = ", ".join([f"{k}: {v}" for k, v in summary.most_common(6)]) or "No clean no-edge rule pass"
@@ -1667,6 +1812,7 @@ def main():
                     "market_win_pct", "best_implied_win_pct",
                     "pinnacle", "pinnacle_gap_pct", "pinnacle_status", "tab_betcha", "bet365",
                     "data_confidence", "data_confidence_score", "data_age", "line_stability",
+                    "log_lock_status", "log_lock_reason", "alignment_status_saved", "parlay_leg_status_saved",
                     "price_lift_pct", "books", "reasons", "data_confidence_reasons", "score_parts", "all_prices",
                 ]
                 st.dataframe(
@@ -1691,12 +1837,28 @@ def main():
 
                 approved_rows = board[board["decision"].astype(str).str.contains("APPROVED|ELITE", regex=True, na=False)]
                 if not approved_rows.empty:
-                    labels = approved_rows.apply(lambda x: f"{x.name}: {x['decision']} — {x['pick']} @ {x['best_odds']} ({x['best_bookmaker']}) — {x['start_nz']}", axis=1).tolist()
-                    choice = st.selectbox("Approved/elite candidate to paper-log", labels)
-                    idx = int(choice.split(":")[0])
-                    if st.button("Log selected as PAPER pick"):
-                        chosen = board.loc[idx].to_dict()
-                        log_row = {
+                    unlocked_rows = approved_rows[approved_rows.get("paper_log_allowed", False).fillna(False).astype(bool)]
+                    locked_rows = approved_rows[~approved_rows.get("paper_log_allowed", False).fillna(False).astype(bool)]
+
+                    if not locked_rows.empty:
+                        st.warning(f"Alignment Lock blocked {len(locked_rows)} approved/elite candidate(s) from paper-log.")
+                        st.dataframe(
+                            locked_rows[["decision", "score", "data_confidence", "data_confidence_score", "pick", "best_odds", "log_lock_status", "log_lock_reason", "alignment_status_saved"]].style.format({"best_odds": "{:.2f}"}),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+                    if unlocked_rows.empty:
+                        st.error("No approved/elite candidate is unlocked for paper-log. Need HIGH Auto Verify or saved FULL GOAT Alignment.")
+                    else:
+                        labels = unlocked_rows.apply(lambda x: f"{x.name}: {x['log_lock_status']} — {x['decision']} — {x['pick']} @ {x['best_odds']} ({x['best_bookmaker']}) — {x['start_nz']}", axis=1).tolist()
+                        choice = st.selectbox("Unlocked approved/elite candidate to paper-log", labels)
+                        idx = int(choice.split(":")[0])
+                        chosen_preview = board.loc[idx].to_dict()
+                        st.success(f"Paper-log unlocked: {chosen_preview.get('log_lock_status')} — {chosen_preview.get('log_lock_reason')}")
+                        if st.button("Log selected as PAPER pick"):
+                            chosen = board.loc[idx].to_dict()
+                            log_row = {
                             "created_at": iso_z(datetime.now(timezone.utc)),
                             "nz_date": chosen["nz_date"],
                             "us_et_date": chosen["us_et_date"],
@@ -1727,6 +1889,10 @@ def main():
                             "best_implied_win_pct": chosen.get("best_implied_win_pct", ""),
                             "line_stability": chosen.get("line_stability", ""),
                             "data_age": chosen.get("data_age", ""),
+                            "log_lock_status": chosen.get("log_lock_status", ""),
+                            "log_lock_reason": chosen.get("log_lock_reason", ""),
+                            "alignment_status_saved": chosen.get("alignment_status_saved", ""),
+                            "parlay_leg_status_saved": chosen.get("parlay_leg_status_saved", ""),
                             "three_source_alignment": proof_summary_text(get_public_proof(chosen)),
                             "result": "Pending",
                             "profit_units": "",
@@ -1758,6 +1924,7 @@ def main():
                 rr.update({"decision": decision, "score": score, "reject_bucket": bucket, "reasons": reason, "plain_explanation": plain, "action": action, "score_parts": score_parts})
                 rows_cards.append(rr)
             rows_cards = apply_auto_verify_to_rows(rows_cards, rules, update_snapshot=False)
+            rows_cards = apply_alignment_lock_to_rows(rows_cards, rules)
             if not rows_cards:
                 st.warning("No card candidates found.")
             else:
@@ -1804,6 +1971,7 @@ def main():
                 rows_verify.append(rr)
 
             rows_verify = apply_auto_verify_to_rows(rows_verify, rules, update_snapshot=False)
+            rows_verify = apply_alignment_lock_to_rows(rows_verify, rules)
             verify_df = pd.DataFrame(rows_verify)
             if verify_df.empty:
                 st.warning("No candidates to verify.")
@@ -1827,6 +1995,7 @@ def main():
                     "data_confidence", "data_confidence_score", "decision", "score",
                     "sport", "game", "pick", "best_odds", "market_win_pct", "best_implied_win_pct",
                     "pinnacle", "pinnacle_gap_pct", "books", "data_age", "line_stability",
+                    "log_lock_status", "log_lock_reason",
                     "data_confidence_reasons", "data_confidence_passed",
                 ]
                 st.dataframe(
@@ -1844,6 +2013,67 @@ def main():
                 st.caption("Tip: press Fetch again after 30–60 seconds. Auto Verify will compare line movement since the previous fetch.")
 
     with tabs[3]:
+        st.subheader("🔒 Alignment Lock")
+        st.info("This is the final paper-log gate. A pick must be approved/elite AND unlocked by HIGH Auto Verify or FULL GOAT Alignment.")
+
+        events_lock = st.session_state.get("events_v36", [])
+        last_markets_lock = st.session_state.get("markets_v36", markets)
+        if not events_lock:
+            st.info("Run Fetch NZ bettor board first, then come here.")
+        else:
+            pinnacle_ref_lock = st.session_state.get("pinnacle_ref_v38", {}) if rules.get("show_pinnacle_reference") else {}
+            candidates_lock = build_candidates(events_lock, last_markets_lock, int(rules["min_minutes_before_start"]), pinnacle_ref_lock)
+
+            rows_lock = []
+            app_count_lock = approved_today_count(log_df)
+            streak_lock = loss_streak_count(log_df)
+
+            for cand in candidates_lock:
+                decision, score, bucket, reason, plain, action, score_parts = decide(cand, rules, flags, app_count_lock, streak_lock)
+                rr = dict(cand)
+                rr.update({
+                    "decision": decision,
+                    "score": score,
+                    "reject_bucket": bucket,
+                    "reasons": reason,
+                    "plain_explanation": plain,
+                    "action": action,
+                    "score_parts": score_parts,
+                })
+                rows_lock.append(rr)
+
+            rows_lock = apply_auto_verify_to_rows(rows_lock, rules, update_snapshot=False)
+            rows_lock = apply_alignment_lock_to_rows(rows_lock, rules)
+            lock_df = pd.DataFrame(rows_lock)
+
+            if lock_df.empty:
+                st.warning("No candidates found.")
+            else:
+                approved_lock_df = lock_df[lock_df["decision"].astype(str).str.contains("APPROVED|ELITE", regex=True, na=False)].copy()
+                if approved_lock_df.empty:
+                    st.info("No approved/elite candidates to unlock.")
+                else:
+                    counts = alignment_lock_summary(approved_lock_df)
+                    c1, c2 = st.columns(2)
+                    c1.metric("Unlocked approved/elite", counts.get("UNLOCKED", 0))
+                    c2.metric("Locked approved/elite", counts.get("LOCKED", 0))
+
+                    show_cols = [
+                        "paper_log_allowed", "log_lock_status", "decision", "score",
+                        "data_confidence", "data_confidence_score",
+                        "alignment_status_saved", "parlay_leg_status_saved",
+                        "sport", "game", "pick", "best_odds", "pinnacle", "pinnacle_gap_pct",
+                        "log_lock_reason",
+                    ]
+                    st.dataframe(
+                        approved_lock_df[show_cols].style.format({"best_odds": "{:.2f}", "pinnacle": "{:.2f}", "pinnacle_gap_pct": "{:.2f}%"}),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                    st.caption("Rule: source conflict always blocks. HIGH Auto Verify unlocks. FULL GOAT Alignment unlocks. Partial alignment is watchlist only unless you enable partial watchlist logs in settings.")
+
+    with tabs[4]:
         st.subheader("🧠 3-Source Alignment")
         st.info("Use this exactly like your manual system: Sports Alerts first, then Sports Chat Place, then Picks & Parlays. This does not scrape public-pick sites and does not make them the main decision maker.")
 
@@ -1874,6 +2104,7 @@ def main():
                 rows_proof.append(rr)
 
             rows_proof = apply_auto_verify_to_rows(rows_proof, rules, update_snapshot=False)
+            rows_proof = apply_alignment_lock_to_rows(rows_proof, rules)
 
             if not rows_proof:
                 st.warning("No candidates available for public proof.")
@@ -2033,12 +2264,12 @@ def main():
                 if public_heavy:
                     st.warning("Public-heavy risk marked. Treat this as a red flag. Do not turn this into a real bet.")
 
-    with tabs[4]:
+    with tabs[5]:
         st.subheader("🟢 Best Price Board")
         st.write("Use the NZ Bettor Board first. It includes all best-price board columns plus NZ/US time conversion.")
         st.caption("v3.3 keeps this tab as a simple explanation so the phone UI stays cleaner.")
 
-    with tabs[5]:
+    with tabs[6]:
         st.subheader("📒 Paper Log")
         df = load_log()
         if df.empty:
@@ -2047,7 +2278,7 @@ def main():
             st.dataframe(df, use_container_width=True)
             st.download_button("Download CSV", df.to_csv(index=False).encode("utf-8"), "goat_shield_paper_log.csv", "text/csv")
 
-    with tabs[6]:
+    with tabs[7]:
         st.subheader("✅ Results")
         df = load_log()
         if df.empty or "result" not in df.columns:
@@ -2073,7 +2304,7 @@ def main():
                     st.success("Saved.")
                     st.rerun()
 
-    with tabs[7]:
+    with tabs[8]:
         st.subheader("📊 Dashboard")
         df = load_log()
         if df.empty:
@@ -2099,7 +2330,7 @@ def main():
                 st.subheader("Performance by market")
                 st.dataframe(df.groupby("market", dropna=False).size().reset_index(name="paper_picks"), use_container_width=True)
 
-    with tabs[8]:
+    with tabs[9]:
         st.subheader("🛡️ Backup")
         df = load_log()
         if not df.empty:
@@ -2116,7 +2347,7 @@ def main():
                 st.error(f"Restore failed: {e}")
 
     st.divider()
-    st.caption("GOAT Shield Live v4.1 AUTO VERIFY is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v4.2 ALIGNMENT LOCK is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":
