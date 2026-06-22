@@ -1,6 +1,6 @@
-# iPhone install guide — v3.9.1 Proof Fix
+# iPhone install guide — v3.9.2 Multi Public Proof
 
-Unzip first. Do not upload only the ZIP.
+Unzip first. Do not upload only the ZIP to GitHub.
 
 Upload/replace these files:
 
@@ -16,4 +16,13 @@ Then:
 3. If old version stays, clear cache/reboot.
 
 Success title:
-GOAT Shield Live v3.9.1 PROOF FIX
+GOAT Shield Live v3.9.2 MULTI PROOF
+
+How to use:
+1. Run NZ Bettor Board.
+2. Open Public Pick Proof.
+3. Select game/pick.
+4. Check Sports Chat Place links.
+5. Check Picks & Parlays links.
+6. Save proof.
+7. Log paper pick only.

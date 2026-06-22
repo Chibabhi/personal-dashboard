@@ -1,17 +1,26 @@
-# GOAT Shield Live v3.9.1 — Public Proof Fix
+# GOAT Shield Live v3.9.2 — Multi Public Proof
 
-Fixes the NameError that happened when Mobile Cards tried to show Sports Chat Place proof status.
+Adds Picks & Parlays manual proof support alongside Sports Chat Place.
 
-Success title:
+## v3.9.2 upgrade
 
-GOAT Shield Live v3.9.1 PROOF FIX
+- Public Pick Proof now includes:
+  - Sports Chat Place links
+  - Picks & Parlays links
+  - Separate checkboxes and result dropdowns for both sources
+  - Separate article URL fields
+  - Shared public-heavy risk flag
+  - Shared notes field
+- Mobile Cards show combined public proof summary.
+- Paper Log stores combined proof summary when logging a paper pick.
 
-## Still included
+## Important
 
-- Pinnacle reference board
-- Sports Chat Place manual proof links
-- Public proof tab
-- Mobile Cards
-- NZD decimal odds
-- NZ bettor mode
-- Paper log only
+This does not scrape Sports Chat Place or Picks & Parlays.
+It only gives safe manual proof links and lets you record what you checked.
+
+Use public-pick sites as cross-checks only, not as the main decision maker.
+
+## Safety
+
+Paper-only. No sportsbook login. No scraping. No real-money betting.

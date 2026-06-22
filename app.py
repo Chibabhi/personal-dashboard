@@ -77,7 +77,7 @@ BET365_HINTS = ("bet365",)
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v3.9.1 PROOF FIX",
+    page_title="GOAT Shield Live v3.9.2 MULTI PROOF",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -977,13 +977,64 @@ def sports_chat_place_links(row: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
+def picks_parlays_sport_slug(sport_text: str) -> str:
+    s = str(sport_text or "").lower()
+    if "mlb" in s or "baseball" in s:
+        return "mlb"
+    if "nba" in s:
+        return "nba"
+    if "nfl" in s:
+        return "nfl"
+    if "nhl" in s:
+        return "nhl"
+    if "wnba" in s:
+        return "wnba"
+    if "mls" in s or "soccer" in s:
+        return "soccer"
+    if "ncaa" in s and "football" in s:
+        return "college-football"
+    if "ncaa" in s or "basketball" in s:
+        return "college-basketball"
+    return ""
+
+
+def picks_and_parlays_links(row: Dict[str, Any]) -> Dict[str, str]:
+    sport = str(row.get("sport", ""))
+    game = str(row.get("game", ""))
+    pick = str(row.get("pick", row.get("pick_label", "")))
+    us_date = str(row.get("us_et_date", ""))
+    slug = picks_parlays_sport_slug(sport)
+
+    q1 = quote_plus(f"site:picksandparlays.net {game} {sport} prediction {us_date}")
+    q2 = quote_plus(f"site:picksandparlays.net {pick} {game} free pick")
+    q3 = quote_plus(f"{game} {sport} Picks and Parlays prediction {us_date}")
+
+    links = {
+        "Picks and Parlays home": "https://picksandparlays.net/",
+        "Picks and Parlays exact game search": f"https://www.google.com/search?q={q1}",
+        "Picks and Parlays pick search": f"https://www.google.com/search?q={q2}",
+        "Picks and Parlays broad search": f"https://www.google.com/search?q={q3}",
+    }
+    if slug:
+        links = {"Picks and Parlays sport page": f"https://picksandparlays.net/free-picks/{slug}", **links}
+    return links
+
+
+
 def proof_summary_text(proof: Dict[str, Any]) -> str:
     if not proof:
-        return "Sports Chat Place proof: not checked"
-    checked = "checked" if proof.get("checked") else "not checked"
-    agrees = proof.get("agreement", "Not set")
+        return "Public proof: not checked"
+
+    # Backward compatible with v3.9/v3.9.1 saved SCP-only proofs.
+    scp_checked = bool(proof.get("scp_checked", proof.get("checked", False)))
+    scp_agreement = proof.get("scp_agreement", proof.get("agreement", "Not set"))
+    pp_checked = bool(proof.get("pp_checked", False))
+    pp_agreement = proof.get("pp_agreement", "Not set")
+
     public = "PUBLIC-HEAVY RISK" if proof.get("public_heavy") else "no public-heavy risk marked"
-    return f"SCP proof: {checked} | {agrees} | {public}"
+    scp_text = f"SCP: {'checked' if scp_checked else 'not checked'} | {scp_agreement}"
+    pp_text = f"Picks & Parlays: {'checked' if pp_checked else 'not checked'} | {pp_agreement}"
+    return f"{scp_text} || {pp_text} || {public}"
 
 
 def render_public_proof_badge(row: Dict[str, Any]) -> None:
@@ -998,8 +1049,8 @@ def render_public_proof_badge(row: Dict[str, Any]) -> None:
 
 
 def main():
-    st.title("🐐 GOAT Shield Live v3.9.1 PROOF FIX")
-    st.caption("Sports Chat Place proof links + Pinnacle reference + NZD Decimal Odds + NZ Bettor Mode. Paper-only. No sportsbook login. No scraping.")
+    st.title("🐐 GOAT Shield Live v3.9.2 MULTI PROOF")
+    st.caption("Sports Chat Place + Picks and Parlays proof links + Pinnacle reference + NZD Decimal Odds + NZ Bettor Mode. Paper-only. No sportsbook login. No scraping.")
 
     api_key_default = secret("ODDS_API_KEY", "")
 
@@ -1340,7 +1391,7 @@ def main():
 
     with tabs[2]:
         st.subheader("🧾 Public Pick Proof")
-        st.info("Use this to manually check Sports Chat Place free-pick pages for the same game/date. This does not scrape the site and does not make SCP the main decision maker.")
+        st.info("Use this to manually check Sports Chat Place and Picks & Parlays free-pick pages for the same game/date. This does not scrape either site and does not make public-pick sites the main decision maker.")
 
         events_proof = st.session_state.get("events_v36", [])
         last_markets_proof = st.session_state.get("markets_v36", markets)
@@ -1395,53 +1446,66 @@ def main():
                 st.write(f"Decision: {chosen.get('decision')} | GOAT Score: {chosen.get('score')}/100")
                 st.caption(chosen.get("plain_explanation", ""))
 
-                st.markdown("#### Search links")
+                st.markdown("#### Search links — Sports Chat Place")
                 for label, url in sports_chat_place_links(chosen).items():
+                    st.link_button(label, url)
+
+                st.markdown("#### Search links — Picks & Parlays")
+                for label, url in picks_and_parlays_links(chosen).items():
                     st.link_button(label, url)
 
                 st.markdown("#### Manual proof result")
                 key = proof_key(chosen)
                 existing = load_public_proofs().get(key, {})
 
-                checked = st.checkbox("Sports Chat Place checked for this exact game/date", value=bool(existing.get("checked", False)))
-                agreement = st.selectbox(
-                    "SCP result compared with our candidate",
-                    [
+                agreement_options = [
                         "Not set",
-                        "SCP agrees with our candidate",
-                        "SCP disagrees / opposite side",
-                        "SCP pick is Over",
-                        "SCP pick is Under",
-                        "SCP pick is Spread only",
-                        "No clear SCP pick found",
-                    ],
-                    index=[
-                        "Not set",
-                        "SCP agrees with our candidate",
-                        "SCP disagrees / opposite side",
-                        "SCP pick is Over",
-                        "SCP pick is Under",
-                        "SCP pick is Spread only",
-                        "No clear SCP pick found",
-                    ].index(existing.get("agreement", "Not set")) if existing.get("agreement", "Not set") in [
-                        "Not set",
-                        "SCP agrees with our candidate",
-                        "SCP disagrees / opposite side",
-                        "SCP pick is Over",
-                        "SCP pick is Under",
-                        "SCP pick is Spread only",
-                        "No clear SCP pick found",
-                    ] else 0
+                        "Agrees with our candidate",
+                        "Disagrees / opposite side",
+                        "Pick is Over",
+                        "Pick is Under",
+                        "Pick is Spread only",
+                        "Pick is Parlay only",
+                        "No clear pick found",
+                    ]
+
+                st.markdown("##### Sports Chat Place")
+                scp_checked = st.checkbox(
+                    "Sports Chat Place checked for this exact game/date",
+                    value=bool(existing.get("scp_checked", existing.get("checked", False))),
                 )
-                proof_url = st.text_input("Paste SCP article URL if found", value=str(existing.get("url", "")))
+                scp_existing = existing.get("scp_agreement", existing.get("agreement", "Not set"))
+                scp_agreement = st.selectbox(
+                    "SCP result compared with our candidate",
+                    agreement_options,
+                    index=agreement_options.index(scp_existing) if scp_existing in agreement_options else 0,
+                )
+                scp_url = st.text_input("Paste Sports Chat Place article URL if found", value=str(existing.get("scp_url", existing.get("url", ""))))
+
+                st.markdown("##### Picks & Parlays")
+                pp_checked = st.checkbox(
+                    "Picks & Parlays checked for this exact game/date",
+                    value=bool(existing.get("pp_checked", False)),
+                )
+                pp_existing = existing.get("pp_agreement", "Not set")
+                pp_agreement = st.selectbox(
+                    "Picks & Parlays result compared with our candidate",
+                    agreement_options,
+                    index=agreement_options.index(pp_existing) if pp_existing in agreement_options else 0,
+                )
+                pp_url = st.text_input("Paste Picks & Parlays article URL if found", value=str(existing.get("pp_url", "")))
+
                 public_heavy = st.checkbox("Public-heavy risk / too many public sources on same side", value=bool(existing.get("public_heavy", False)))
                 notes = st.text_area("Notes", value=str(existing.get("notes", "")), height=100)
 
                 if st.button("Save public proof for this pick"):
                     save_public_proof(key, {
-                        "checked": checked,
-                        "agreement": agreement,
-                        "url": proof_url,
+                        "scp_checked": scp_checked,
+                        "scp_agreement": scp_agreement,
+                        "scp_url": scp_url,
+                        "pp_checked": pp_checked,
+                        "pp_agreement": pp_agreement,
+                        "pp_url": pp_url,
                         "public_heavy": public_heavy,
                         "notes": notes,
                         "saved_at": iso_z(datetime.now(timezone.utc)),
@@ -1537,7 +1601,7 @@ def main():
                 st.error(f"Restore failed: {e}")
 
     st.divider()
-    st.caption("GOAT Shield Live v3.9.1 PROOF FIX is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v3.9.2 MULTI PROOF is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":
