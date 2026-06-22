@@ -1,8 +1,8 @@
-# v3.7.2 hard reset install
+# v3.7.3 KeyError fixed install
 
 Do not upload only the ZIP to GitHub.
 
-You must upload the individual files:
+Unzip first, then upload/replace these individual files:
 
 - app.py
 - goat_engine_live.py
@@ -10,12 +10,10 @@ You must upload the individual files:
 - README.md
 - README_iPhone_Deploy.md
 
-Then press Commit changes.
-
-Then in Streamlit:
-- Manage app
-- Reboot app
-- If still old, clear cache/reboot
+Then:
+1. Press Commit changes in GitHub.
+2. In Streamlit: Manage app > Reboot app.
+3. If still red: Manage app > Clear cache/reboot.
 
 Success check:
-The app title must show: GOAT Shield Live v3.7.2 HARD RESET
+The title must show: GOAT Shield Live v3.7.3 KEYERROR FIXED

@@ -28,8 +28,8 @@ NZ_TZ_NAME = "Pacific/Auckland"
 ET_TZ_NAME = "America/New_York"
 
 DEFAULT_RULES = {
-    "min_odds": 1.40,
-    "max_odds": 2.20,
+    "min_decimal_odds": 1.40,
+    "max_decimal_odds": 2.20,
     "min_books_compared": 5,
     "max_daily": 3,
     "lock_losses": 3,
@@ -74,7 +74,7 @@ BET365_HINTS = ("bet365",)
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v3.7.2 HARD RESET",
+    page_title="GOAT Shield Live v3.7.3 KEYERROR FIXED",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -810,7 +810,7 @@ def loss_streak_count(df):
 # UI
 # =========================================================
 def main():
-    st.title("🐐 GOAT Shield Live v3.7.2 HARD RESET")
+    st.title("🐐 GOAT Shield Live v3.7.3 KEYERROR FIXED")
     st.caption("US National Sports Pack + NZD Decimal Odds + No Edge Gate + NZ Bettor Mode. Paper-only. No sportsbook login. No real-money auto-betting.")
 
     api_key_default = secret("ODDS_API_KEY", "")
@@ -893,6 +893,18 @@ def main():
 
         st.markdown("### GOAT rules — no edge gate")
         rules = dict(DEFAULT_RULES)
+        # v3.7.3 safety guard: support old cached rule names and prevent KeyError.
+        rules.setdefault("min_decimal_odds", rules.get("min_odds", 1.40))
+        rules.setdefault("max_decimal_odds", rules.get("max_odds", 2.20))
+        rules.setdefault("min_books_compared", 5)
+        rules.setdefault("max_daily", 3)
+        rules.setdefault("lock_losses", 3)
+        rules.setdefault("min_minutes_before_start", 90)
+        rules.setdefault("require_home_pick", True)
+        rules.setdefault("require_home_favourite", True)
+        rules.setdefault("require_pinnacle_value", False)
+        rules.setdefault("reject_red_flags", True)
+        rules.setdefault("apply_home_rules_to_team_markets", True)
         rules["min_decimal_odds"] = st.number_input("Min NZD decimal odds", 1.01, 10.0, float(rules["min_decimal_odds"]), 0.01)
         rules["max_decimal_odds"] = st.number_input("Max NZD decimal odds", 1.01, 10.0, float(rules["max_decimal_odds"]), 0.01)
         rules["min_books_compared"] = st.number_input("Minimum bookmakers compared", 1, 20, int(rules["min_books_compared"]), 1)
@@ -1183,7 +1195,7 @@ def main():
                 st.error(f"Restore failed: {e}")
 
     st.divider()
-    st.caption("GOAT Shield Live v3.7.2 HARD RESET is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v3.7.3 KEYERROR FIXED is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":

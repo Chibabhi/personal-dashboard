@@ -1,9 +1,9 @@
-# GOAT Shield Live v3.7.2 HARD RESET
+# GOAT Shield Live v3.7.3 KEYERROR FIXED
 
-Use this when Streamlit is still showing the old v3.7 error.
+This fixes the `KeyError: min_decimal_odds`.
 
-If deployed correctly, the app title will show:
+Success check after deployment:
 
-GOAT Shield Live v3.7.2 HARD RESET
+GOAT Shield Live v3.7.3 KEYERROR FIXED
 
-Upload/replace all individual files in GitHub, then commit and reboot Streamlit.
+Upload/replace individual files in GitHub, commit, then reboot Streamlit.
