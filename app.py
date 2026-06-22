@@ -77,7 +77,7 @@ BET365_HINTS = ("bet365",)
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v3.9 PUBLIC PROOF",
+    page_title="GOAT Shield Live v3.9.1 PROOF FIX",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -907,8 +907,98 @@ def loss_streak_count(df):
 # =========================================================
 # UI
 # =========================================================
+
+# -------------------------------
+# Public pick proof helpers — v3.9.1
+# -------------------------------
+def proof_key(row: Dict[str, Any]) -> str:
+    return "|".join([
+        str(row.get("sport", "")),
+        str(row.get("game", "")),
+        str(row.get("market_label", row.get("market", ""))),
+        str(row.get("pick", row.get("pick_label", ""))),
+        str(row.get("start_nz", "")),
+    ])
+
+
+def load_public_proofs() -> Dict[str, Dict[str, Any]]:
+    if "public_proofs_v39" not in st.session_state:
+        st.session_state.public_proofs_v39 = {}
+    return st.session_state.public_proofs_v39
+
+
+def save_public_proof(key: str, proof: Dict[str, Any]) -> None:
+    proofs = load_public_proofs()
+    proofs[key] = proof
+    st.session_state.public_proofs_v39 = proofs
+
+
+def get_public_proof(row: Dict[str, Any]) -> Dict[str, Any]:
+    return load_public_proofs().get(proof_key(row), {})
+
+
+def scp_sport_slug(sport_text: str) -> str:
+    s = str(sport_text or "").lower()
+    if "mlb" in s or "baseball" in s:
+        return "mlb-picks"
+    if "nba" in s:
+        return "nba-picks"
+    if "nfl" in s:
+        return "nfl-picks"
+    if "nhl" in s:
+        return "nhl-picks"
+    if "wnba" in s:
+        return "wnba-picks"
+    if "mls" in s or "soccer" in s:
+        return "soccer-picks"
+    if "ncaa" in s and "football" in s:
+        return "college-football-picks"
+    if "ncaa" in s or "basketball" in s:
+        return "college-basketball-picks"
+    return "free-picks"
+
+
+def sports_chat_place_links(row: Dict[str, Any]) -> Dict[str, str]:
+    sport = str(row.get("sport", ""))
+    game = str(row.get("game", ""))
+    pick = str(row.get("pick", row.get("pick_label", "")))
+    us_date = str(row.get("us_et_date", ""))
+    slug = scp_sport_slug(sport)
+
+    q1 = quote_plus(f"site:sportschatplace.com {game} {sport} prediction {us_date}")
+    q2 = quote_plus(f"site:sportschatplace.com {pick} {game} free pick")
+    q3 = quote_plus(f"{game} {sport} Sports Chat Place prediction {us_date}")
+
+    return {
+        "Sports Chat Place sport page": f"https://sportschatplace.com/{slug}/",
+        "Google exact game search": f"https://www.google.com/search?q={q1}",
+        "Google pick search": f"https://www.google.com/search?q={q2}",
+        "Google broad search": f"https://www.google.com/search?q={q3}",
+    }
+
+
+def proof_summary_text(proof: Dict[str, Any]) -> str:
+    if not proof:
+        return "Sports Chat Place proof: not checked"
+    checked = "checked" if proof.get("checked") else "not checked"
+    agrees = proof.get("agreement", "Not set")
+    public = "PUBLIC-HEAVY RISK" if proof.get("public_heavy") else "no public-heavy risk marked"
+    return f"SCP proof: {checked} | {agrees} | {public}"
+
+
+def render_public_proof_badge(row: Dict[str, Any]) -> None:
+    proof = get_public_proof(row)
+    summary = proof_summary_text(proof)
+    if proof.get("public_heavy"):
+        st.warning(summary)
+    elif proof.get("checked"):
+        st.info(summary)
+    else:
+        st.caption(summary)
+
+
 def main():
-    st.title("🐐 GOAT Shield Live v3.9 PUBLIC PROOF")
+    st.title("🐐 GOAT Shield Live v3.9.1 PROOF FIX")
     st.caption("Sports Chat Place proof links + Pinnacle reference + NZD Decimal Odds + NZ Bettor Mode. Paper-only. No sportsbook login. No scraping.")
 
     api_key_default = secret("ODDS_API_KEY", "")
@@ -1447,7 +1537,7 @@ def main():
                 st.error(f"Restore failed: {e}")
 
     st.divider()
-    st.caption("GOAT Shield Live v3.9 PUBLIC PROOF is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v3.9.1 PROOF FIX is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":

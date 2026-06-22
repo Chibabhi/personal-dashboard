@@ -1,6 +1,6 @@
-# iPhone install guide — v3.9 Public Pick Proof
+# iPhone install guide — v3.9.1 Proof Fix
 
-Unzip first. Do not upload only the ZIP to GitHub.
+Unzip first. Do not upload only the ZIP.
 
 Upload/replace these files:
 
@@ -16,12 +16,4 @@ Then:
 3. If old version stays, clear cache/reboot.
 
 Success title:
-GOAT Shield Live v3.9 PUBLIC PROOF
-
-How to use:
-1. Run 🇳🇿 NZ Bettor Board.
-2. Open 🧾 Public Pick Proof.
-3. Select a game/pick.
-4. Tap Sports Chat Place or Google search buttons.
-5. Save checked/agrees/disagrees/public-heavy risk.
-6. Open 📱 Mobile Cards to see proof status.
+GOAT Shield Live v3.9.1 PROOF FIX
