@@ -1,43 +1,18 @@
-# GOAT Shield Live v4.2 — Alignment Lock
+# GOAT Shield Live v4.2.1 — Paper Log Fix
 
-This version adds the final paper-log gate.
+Fixes the UnboundLocalError that happened after pressing:
 
-## v4.2 upgrade
+Log selected as PAPER pick
 
-A pick can appear approved/elite, but it cannot be paper-logged unless Alignment Lock unlocks it.
+## Still included
 
-## Unlock rules
-
-Paper-log unlocks when:
-
-- Decision is APPROVED/ELITE, and
-- Auto Verify confidence is HIGH
-
-or:
-
-- Decision is APPROVED/ELITE, and
-- Saved 3-source proof says FULL GOAT ALIGNMENT
-
-## Hard blocks
-
-- Source conflict always blocks
-- Not approved/elite blocks
-- Medium/low confidence without full alignment blocks
-- Partial alignment is watchlist only by default
-
-## New tab
-
-- 🔒 Alignment Lock
-
-It shows:
-
-- Unlocked approved/elite
-- Locked approved/elite
-- Lock reason
+- Alignment Lock
+- Auto Verify
 - Data confidence
-- Saved alignment status
-- Parlay leg status
+- Pinnacle reference
+- 3-source alignment
+- Paper-log only safety
 
-## Safety
+## Success title
 
-Paper-only. No sportsbook login. No scraping. No real-money betting.
+GOAT Shield Live v4.2.1 LOG FIX

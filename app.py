@@ -86,7 +86,7 @@ BET365_HINTS = ("bet365",)
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v4.2 ALIGNMENT LOCK",
+    page_title="GOAT Shield Live v4.2.1 LOG FIX",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -1490,8 +1490,8 @@ def render_public_proof_badge(row: Dict[str, Any]) -> None:
 
 
 def main():
-    st.title("🐐 GOAT Shield Live v4.2 ALIGNMENT LOCK")
-    st.caption("Alignment Lock + Auto Verify. Only HIGH-confidence or FULL GOAT Alignment can be paper-logged. Paper-only.")
+    st.title("🐐 GOAT Shield Live v4.2.1 LOG FIX")
+    st.caption("Alignment Lock + Auto Verify + paper-log save fix. Only HIGH-confidence or FULL GOAT Alignment can be paper-logged. Paper-only.")
 
     api_key_default = secret("ODDS_API_KEY", "")
 
@@ -1837,8 +1837,13 @@ def main():
 
                 approved_rows = board[board["decision"].astype(str).str.contains("APPROVED|ELITE", regex=True, na=False)]
                 if not approved_rows.empty:
-                    unlocked_rows = approved_rows[approved_rows.get("paper_log_allowed", False).fillna(False).astype(bool)]
-                    locked_rows = approved_rows[~approved_rows.get("paper_log_allowed", False).fillna(False).astype(bool)]
+                    # Alignment Lock controls which approved/elite rows are allowed to be paper-logged.
+                    if "paper_log_allowed" in approved_rows.columns:
+                        unlocked_rows = approved_rows[approved_rows["paper_log_allowed"].fillna(False).astype(bool)]
+                        locked_rows = approved_rows[~approved_rows["paper_log_allowed"].fillna(False).astype(bool)]
+                    else:
+                        unlocked_rows = approved_rows.copy()
+                        locked_rows = approved_rows.iloc[0:0].copy()
 
                     if not locked_rows.empty:
                         st.warning(f"Alignment Lock blocked {len(locked_rows)} approved/elite candidate(s) from paper-log.")
@@ -1851,59 +1856,64 @@ def main():
                     if unlocked_rows.empty:
                         st.error("No approved/elite candidate is unlocked for paper-log. Need HIGH Auto Verify or saved FULL GOAT Alignment.")
                     else:
-                        labels = unlocked_rows.apply(lambda x: f"{x.name}: {x['log_lock_status']} — {x['decision']} — {x['pick']} @ {x['best_odds']} ({x['best_bookmaker']}) — {x['start_nz']}", axis=1).tolist()
+                        labels = unlocked_rows.apply(
+                            lambda x: f"{x.name}: {x['log_lock_status']} — {x['decision']} — {x['pick']} @ {x['best_odds']} ({x['best_bookmaker']}) — {x['start_nz']}",
+                            axis=1
+                        ).tolist()
+
                         choice = st.selectbox("Unlocked approved/elite candidate to paper-log", labels)
                         idx = int(choice.split(":")[0])
                         chosen_preview = board.loc[idx].to_dict()
                         st.success(f"Paper-log unlocked: {chosen_preview.get('log_lock_status')} — {chosen_preview.get('log_lock_reason')}")
+
                         if st.button("Log selected as PAPER pick"):
                             chosen = board.loc[idx].to_dict()
                             log_row = {
-                            "created_at": iso_z(datetime.now(timezone.utc)),
-                            "nz_date": chosen["nz_date"],
-                            "us_et_date": chosen["us_et_date"],
-                            "start_nz": chosen["start_nz"],
-                            "start_et": chosen["start_et"],
-                            "starts_in": chosen["starts_in"],
-                            "sport": chosen["sport"],
-                            "game": chosen["game"],
-                            "market": chosen["market_label"],
-                            "pick_label": chosen["pick"],
-                            "best_odds": chosen["best_odds"],
-                            "best_bookmaker": chosen["best_bookmaker"],
-                            "avg_odds": chosen["avg_odds"],
-                            "pinnacle": chosen["pinnacle"],
-                            "pinnacle_gap_pct": chosen["pinnacle_gap_pct"],
-                            "pinnacle_status": chosen["pinnacle_status"],
-                            "tab_betcha": chosen["tab_betcha"],
-                            "bet365": chosen["bet365"],
-                            "price_lift_pct": chosen["price_lift_pct"],
-                            "decision": chosen["decision"],
-                            "score": chosen["score"],
-                            "plain_explanation": chosen.get("plain_explanation", ""),
-                            "score_parts": chosen.get("score_parts", ""),
-                            "data_confidence": chosen.get("data_confidence", ""),
-                            "data_confidence_score": chosen.get("data_confidence_score", ""),
-                            "data_confidence_reasons": chosen.get("data_confidence_reasons", ""),
-                            "market_win_pct": chosen.get("market_win_pct", ""),
-                            "best_implied_win_pct": chosen.get("best_implied_win_pct", ""),
-                            "line_stability": chosen.get("line_stability", ""),
-                            "data_age": chosen.get("data_age", ""),
-                            "log_lock_status": chosen.get("log_lock_status", ""),
-                            "log_lock_reason": chosen.get("log_lock_reason", ""),
-                            "alignment_status_saved": chosen.get("alignment_status_saved", ""),
-                            "parlay_leg_status_saved": chosen.get("parlay_leg_status_saved", ""),
-                            "three_source_alignment": proof_summary_text(get_public_proof(chosen)),
-                            "result": "Pending",
-                            "profit_units": "",
-                            "closing_odds": "",
-                            "closing_price_movement": "",
-                            "all_prices": chosen["all_prices"],
-                        }
-                        new_df = pd.concat([pd.DataFrame([log_row]), log_df], ignore_index=True)
-                        save_log(new_df)
-                        st.success("Logged as paper pick only.")
-                        st.rerun()
+                                "created_at": iso_z(datetime.now(timezone.utc)),
+                                "nz_date": chosen.get("nz_date", ""),
+                                "us_et_date": chosen.get("us_et_date", ""),
+                                "start_nz": chosen.get("start_nz", ""),
+                                "start_et": chosen.get("start_et", ""),
+                                "starts_in": chosen.get("starts_in", ""),
+                                "sport": chosen.get("sport", ""),
+                                "game": chosen.get("game", ""),
+                                "market": chosen.get("market_label", ""),
+                                "pick_label": chosen.get("pick", ""),
+                                "best_odds": chosen.get("best_odds", ""),
+                                "best_bookmaker": chosen.get("best_bookmaker", ""),
+                                "avg_odds": chosen.get("avg_odds", ""),
+                                "pinnacle": chosen.get("pinnacle", ""),
+                                "pinnacle_gap_pct": chosen.get("pinnacle_gap_pct", ""),
+                                "pinnacle_status": chosen.get("pinnacle_status", ""),
+                                "tab_betcha": chosen.get("tab_betcha", ""),
+                                "bet365": chosen.get("bet365", ""),
+                                "price_lift_pct": chosen.get("price_lift_pct", ""),
+                                "decision": chosen.get("decision", ""),
+                                "score": chosen.get("score", ""),
+                                "plain_explanation": chosen.get("plain_explanation", ""),
+                                "score_parts": chosen.get("score_parts", ""),
+                                "data_confidence": chosen.get("data_confidence", ""),
+                                "data_confidence_score": chosen.get("data_confidence_score", ""),
+                                "data_confidence_reasons": chosen.get("data_confidence_reasons", ""),
+                                "market_win_pct": chosen.get("market_win_pct", ""),
+                                "best_implied_win_pct": chosen.get("best_implied_win_pct", ""),
+                                "line_stability": chosen.get("line_stability", ""),
+                                "data_age": chosen.get("data_age", ""),
+                                "log_lock_status": chosen.get("log_lock_status", ""),
+                                "log_lock_reason": chosen.get("log_lock_reason", ""),
+                                "alignment_status_saved": chosen.get("alignment_status_saved", ""),
+                                "parlay_leg_status_saved": chosen.get("parlay_leg_status_saved", ""),
+                                "three_source_alignment": proof_summary_text(get_public_proof(chosen)),
+                                "result": "Pending",
+                                "profit_units": "",
+                                "closing_odds": "",
+                                "closing_price_movement": "",
+                                "all_prices": chosen.get("all_prices", ""),
+                            }
+                            new_df = pd.concat([pd.DataFrame([log_row]), log_df], ignore_index=True)
+                            save_log(new_df)
+                            st.success("Logged as paper pick only.")
+                            st.rerun()
 
     with tabs[1]:
         st.subheader("📱 Mobile Cards")
@@ -2347,7 +2357,7 @@ def main():
                 st.error(f"Restore failed: {e}")
 
     st.divider()
-    st.caption("GOAT Shield Live v4.2 ALIGNMENT LOCK is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v4.2.1 LOG FIX is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":
