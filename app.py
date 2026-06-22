@@ -37,6 +37,8 @@ DEFAULT_RULES = {
     "require_home_pick": True,
     "require_home_favourite": True,
     "require_pinnacle_value": False,
+    "show_pinnacle_reference": True,
+    "pinnacle_score_bonus": True,
     "reject_red_flags": True,
     "apply_home_rules_to_team_markets": True,
 }
@@ -74,7 +76,7 @@ BET365_HINTS = ("bet365",)
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v3.7.3 KEYERROR FIXED",
+    page_title="GOAT Shield Live v3.8 PINNACLE REF",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -418,7 +420,74 @@ def default_us_sport_selection(sports_map: Dict[str, str], mode: str) -> List[st
     return ["baseball_mlb"] if "baseball_mlb" in sports_map else active_us[:1]
 
 
-def build_candidates(events: List[Dict[str, Any]], selected_markets: List[str], min_minutes_before_start: int) -> List[Dict[str, Any]]:
+
+def build_pinnacle_reference(events: List[Dict[str, Any]], selected_markets: List[str]) -> Dict[Tuple, Dict[str, Any]]:
+    """Build a Pinnacle-only reference map. This is a reference line only; no sportsbook login or scraping."""
+    rows = extract_price_rows(events, selected_markets)
+    ref: Dict[Tuple, Dict[str, Any]] = {}
+
+    for r in rows:
+        if not (has_hint(r.get("book_key", ""), PINNACLE_HINTS) or has_hint(r.get("book", ""), PINNACLE_HINTS)):
+            continue
+
+        id_key = (r["event_id"], r["market"], r["outcome"], r["point"])
+        fallback_key = (
+            "fallback",
+            r["sport_key"],
+            str(r["home"]).lower(),
+            str(r["away"]).lower(),
+            str(r["commence_time"])[:16],
+            r["market"],
+            r["outcome"],
+            r["point"],
+        )
+
+        for k in (id_key, fallback_key):
+            if k not in ref or r["price"] > ref[k]["price"]:
+                ref[k] = r
+
+    return ref
+
+
+def get_pinnacle_ref_row(ref: Optional[Dict[Tuple, Dict[str, Any]]], best: Dict[str, Any], market: str, outcome: str, point: Any) -> Optional[Dict[str, Any]]:
+    if not ref:
+        return None
+
+    id_key = (best["event_id"], market, outcome, point)
+    if id_key in ref:
+        return ref[id_key]
+
+    fallback_key = (
+        "fallback",
+        best["sport_key"],
+        str(best["home"]).lower(),
+        str(best["away"]).lower(),
+        str(best["commence_time"])[:16],
+        market,
+        outcome,
+        point,
+    )
+    return ref.get(fallback_key)
+
+
+def pinnacle_compare_status(best_odds: float, pinnacle_odds: Optional[float]) -> Tuple[Optional[float], str]:
+    if pinnacle_odds is None or pinnacle_odds <= 1:
+        return None, "Pinnacle not available"
+
+    gap = (best_odds / pinnacle_odds - 1) * 100
+
+    if gap >= 1.0:
+        status = "Best price beats Pinnacle reference"
+    elif gap >= -0.25:
+        status = "Near Pinnacle reference"
+    else:
+        status = "Best price below Pinnacle reference"
+
+    return round(gap, 2), status
+
+
+
+def build_candidates(events: List[Dict[str, Any]], selected_markets: List[str], min_minutes_before_start: int, pinnacle_ref: Optional[Dict[Tuple, Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     rows = extract_price_rows(events, selected_markets)
     by_event = defaultdict(list)
     for r in rows:
@@ -457,8 +526,12 @@ def build_candidates(events: List[Dict[str, Any]], selected_markets: List[str], 
             nzb = [x for x in group if has_hint(x["book_key"], NZ_BOOK_HINTS) or has_hint(x["book"], NZ_BOOK_HINTS)]
             b365 = [x for x in group if has_hint(x["book_key"], BET365_HINTS) or has_hint(x["book"], BET365_HINTS)]
             pin_best = max(pin, key=lambda x: x["price"]) if pin else None
+            ref_pin = get_pinnacle_ref_row(pinnacle_ref, best, market, outcome, point)
+            if ref_pin is not None and (pin_best is None or ref_pin["price"] > pin_best["price"]):
+                pin_best = ref_pin
             nz_best = max(nzb, key=lambda x: x["price"]) if nzb else None
             b365_best = max(b365, key=lambda x: x["price"]) if b365 else None
+            pinnacle_gap_pct, pinnacle_status = pinnacle_compare_status(best["price"], pin_best["price"] if pin_best else None)
 
             is_team = market in ("h2h", "spreads") and outcome in (home, away)
             is_home = bool(is_team and outcome == home)
@@ -495,6 +568,9 @@ def build_candidates(events: List[Dict[str, Any]], selected_markets: List[str], 
                 "avg_odds": round(avg_odds, 3),
                 "price_lift_pct": round(((best["price"] / avg_odds - 1) * 100) if avg_odds else 0, 2),
                 "pinnacle": round(pin_best["price"], 3) if pin_best else None,
+                "pinnacle_gap_pct": pinnacle_gap_pct,
+                "pinnacle_status": pinnacle_status,
+                "pinnacle_available": bool(pin_best),
                 "tab_betcha": round(nz_best["price"], 3) if nz_best else None,
                 "bet365": round(b365_best["price"], 3) if b365_best else None,
                 "consensus_prob": round(consensus_prob, 5),
@@ -525,11 +601,15 @@ def score_odds_range(best_odds: float, min_odds: float, max_odds: float) -> int:
     return 15 if min_odds <= best_odds <= max_odds else 0
 
 
-def score_book_support(books: int, min_books: int, pinnacle_ok: bool) -> int:
+def score_book_support(books: int, min_books: int, pinnacle_ok: bool, pinnacle_available: bool = False, pinnacle_gap_pct: Optional[float] = None) -> int:
     pts = min(15, int(books) * 3)
     if books >= min_books:
         pts += 3
+    if pinnacle_available:
+        pts += 1
     if pinnacle_ok:
+        pts += 2
+    if pinnacle_gap_pct is not None and pinnacle_gap_pct >= 1.0:
         pts += 2
     return min(20, pts)
 
@@ -565,7 +645,13 @@ def goat_score_breakdown(c: Dict[str, Any], rules: Dict[str, Any], flags: Dict[s
     return {
         "Best price quality": score_price_quality(float(c.get("price_lift_pct", 0))),
         "NZD decimal odds range": score_odds_range(float(c.get("best_odds", 0)), float(rules["min_decimal_odds"]), float(rules["max_decimal_odds"])),
-        "Bookmaker support": score_book_support(int(c.get("books", 0)), int(rules["min_books_compared"]), bool(c.get("pinnacle_ok"))),
+        "Bookmaker support": score_book_support(
+            int(c.get("books", 0)),
+            int(rules["min_books_compared"]),
+            bool(c.get("pinnacle_ok")),
+            bool(c.get("pinnacle_available")),
+            c.get("pinnacle_gap_pct"),
+        ),
         "Time safety": score_time_safety(bool(c.get("time_locked"))),
         "GOAT rules": score_goat_rules(c, rules),
         "Discipline": score_discipline(flags, approved_count, loss_streak, rules),
@@ -586,8 +672,11 @@ def plain_explanation(decision: str, c: Dict[str, Any], reason: str, rules: Dict
     lift = float(c.get("price_lift_pct", 0))
     min_odds = float(rules["min_decimal_odds"])
     max_odds = float(rules["max_decimal_odds"])
+    pin = c.get("pinnacle")
+    pin_status = c.get("pinnacle_status", "Pinnacle not available")
+    pin_line = f" Pinnacle reference: {pin:.2f} — {pin_status}." if pin else " Pinnacle reference: not available for this pick/market."
     if "APPROVED" in decision or "ELITE" in decision:
-        return "Passed no-edge GOAT checks: NZD decimal odds range, bookmaker support, NZ/US time safety, and discipline rules. Paper log only."
+        return "Passed no-edge GOAT checks: NZD decimal odds range, bookmaker support, NZ/US time safety, and discipline rules." + pin_line + " Paper log only."
     if "LOW BOOK COVERAGE" in decision:
         return f"Only {c.get('books', 0)} bookmaker prices were compared. Your minimum is {rules['min_books_compared']}. Not enough market coverage."
     if "ODDS RANGE" in decision:
@@ -724,7 +813,14 @@ def render_candidate_card(row: dict, idx: int):
         c3, c4 = st.columns(2)
         c3.metric("Best NZD decimal odds", f"{best_odds:.2f}")
         c4.metric("Avg book odds", f"{avg_odds:.2f}")
+        pin = row.get("pinnacle")
+        pin_gap = row.get("pinnacle_gap_pct")
+        pin_status = row.get("pinnacle_status", "Pinnacle not available")
         st.markdown(f"**Best bookmaker:** {best_book}")
+        if pin is not None and str(pin) != "nan":
+            st.markdown(f"**Pinnacle reference:** {safe_float(pin, 0):.2f} | Gap: {safe_float(pin_gap, 0):+.2f}% | {pin_status}")
+        else:
+            st.markdown("**Pinnacle reference:** not available")
         st.markdown(f"**Time:** {status} • starts in **{starts_in}**")
         st.markdown(f"**NZ:** {start_nz}")
         st.markdown(f"**US ET:** {start_et}")
@@ -810,7 +906,7 @@ def loss_streak_count(df):
 # UI
 # =========================================================
 def main():
-    st.title("🐐 GOAT Shield Live v3.7.3 KEYERROR FIXED")
+    st.title("🐐 GOAT Shield Live v3.8 PINNACLE REF")
     st.caption("US National Sports Pack + NZD Decimal Odds + No Edge Gate + NZ Bettor Mode. Paper-only. No sportsbook login. No real-money auto-betting.")
 
     api_key_default = secret("ODDS_API_KEY", "")
@@ -867,7 +963,15 @@ def main():
         )
 
         regions = st.multiselect("Regions", ["us", "uk", "au", "eu"], default=["us"])
-        bookmakers_filter = st.text_input("Optional bookmaker filter", value="", help="Example: pinnacle,draftkings. Leave blank to use regions.")
+        bookmakers_filter = st.text_input("Optional bookmaker filter", value="", help="Example: draftkings,fanduel. Leave blank to use regions.")
+
+        st.markdown("### Pinnacle reference")
+        rules_pinnacle_ref = st.checkbox(
+            "Pull Pinnacle reference odds",
+            value=True,
+            help="Uses The Odds API bookmaker=pinnacle as a reference line if available. This is not a sportsbook login and not scraping.",
+        )
+        st.caption("Pinnacle may not be available for every sport/market and provider coverage may not be instant.")
 
         time_filter = st.selectbox(
             "Time filter",
@@ -887,7 +991,9 @@ def main():
             st.caption(f"API window UTC: {start} → {end}")
 
         est = max(1, len(selected_sports)) * max(1, len(markets)) * (1 if bookmakers_filter.strip() else max(1, len(regions)))
-        st.caption(f"Estimated credits/fetch: about {est}. Start small.")
+        if rules_pinnacle_ref:
+            est += max(1, len(selected_sports)) * max(1, len(markets))
+        st.caption(f"Estimated credits/fetch: about {est}. Start small. Pinnacle reference adds extra API calls.")
         if len(selected_sports) > 3 or len(markets) > 1:
             st.warning("Credit warning: multiple sports/markets can use API credits fast. Use h2h only first, then add spreads/totals later.")
 
@@ -903,6 +1009,8 @@ def main():
         rules.setdefault("require_home_pick", True)
         rules.setdefault("require_home_favourite", True)
         rules.setdefault("require_pinnacle_value", False)
+        rules.setdefault("show_pinnacle_reference", True)
+        rules.setdefault("pinnacle_score_bonus", True)
         rules.setdefault("reject_red_flags", True)
         rules.setdefault("apply_home_rules_to_team_markets", True)
         rules["min_decimal_odds"] = st.number_input("Min NZD decimal odds", 1.01, 10.0, float(rules["min_decimal_odds"]), 0.01)
@@ -914,7 +1022,12 @@ def main():
         rules["apply_home_rules_to_team_markets"] = st.checkbox("Apply home rules to team markets only", True)
         rules["require_home_pick"] = st.checkbox("Require team-market pick to be home team", True)
         rules["require_home_favourite"] = st.checkbox("Require home favourite for team markets", True)
-        rules["require_pinnacle_value"] = st.checkbox("Require Pinnacle value if present", False)
+        rules["show_pinnacle_reference"] = bool(rules_pinnacle_ref)
+        rules["require_pinnacle_value"] = st.checkbox(
+            "Require Pinnacle confirmation if available",
+            False,
+            help="OFF is safer. If ON and Pinnacle is missing or worse, candidate becomes watchlist.",
+        )
         rules["reject_red_flags"] = st.checkbox("Reject any manual red flag", True)
 
         st.markdown("### Manual red flags")
@@ -954,7 +1067,10 @@ def main():
             metas = []
             errors = []
 
-            with st.spinner("Fetching bookmaker prices with NZ/US time conversion..."):
+            pinnacle_events = []
+            pinnacle_metas = []
+
+            with st.spinner("Fetching bookmaker prices + Pinnacle reference with NZ/US time conversion..."):
                 for sport in selected_sports:
                     try:
                         ev, meta = fetch_odds(api_key, sport, ",".join(regions), ",".join(markets), bookmakers_filter, start, end)
@@ -963,21 +1079,35 @@ def main():
                     except Exception as e:
                         errors.append(f"{sports_map.get(sport, sport)}: {clean_api_error(e)}")
 
+                    if rules.get("show_pinnacle_reference") and not bookmakers_filter.strip():
+                        try:
+                            pin_ev, pin_meta = fetch_odds(api_key, sport, "", ",".join(markets), "pinnacle", start, end)
+                            pinnacle_events.extend(pin_ev)
+                            pinnacle_metas.append(pin_meta)
+                        except Exception as e:
+                            errors.append(f"Pinnacle reference {sports_map.get(sport, sport)}: {clean_api_error(e)}")
+
+            pinnacle_ref = build_pinnacle_reference(pinnacle_events, markets) if pinnacle_events else {}
             st.session_state["events_v36"] = events
+            st.session_state["pinnacle_ref_v38"] = pinnacle_ref
+            st.session_state["pinnacle_events_v38"] = pinnacle_events
             st.session_state["markets_v36"] = markets
             st.session_state["metas_v36"] = metas
+            st.session_state["pinnacle_metas_v38"] = pinnacle_metas
             st.session_state["rules_v36"] = rules
 
             for e in errors:
                 st.error(e)
             if metas:
-                st.success(f"Fetched {len(events)} events. Requests used: {metas[-1].get('requests_used')}. Remaining: {metas[-1].get('requests_remaining')}.")
+                pin_note = f" Pinnacle reference matches: {len(st.session_state.get('pinnacle_ref_v38', {}))}." if rules.get("show_pinnacle_reference") else ""
+                st.success(f"Fetched {len(events)} events. Requests used: {metas[-1].get('requests_used')}. Remaining: {metas[-1].get('requests_remaining')}.{pin_note}")
 
         events = st.session_state.get("events_v36", [])
         last_markets = st.session_state.get("markets_v36", markets)
 
         if events:
-            candidates = build_candidates(events, last_markets, int(rules["min_minutes_before_start"]))
+            pinnacle_ref = st.session_state.get("pinnacle_ref_v38", {}) if rules.get("show_pinnacle_reference") else {}
+            candidates = build_candidates(events, last_markets, int(rules["min_minutes_before_start"]), pinnacle_ref)
             rows = []
             app_count = approved_today_count(log_df)
             streak = loss_streak_count(log_df)
@@ -1017,11 +1147,11 @@ def main():
                     "start_nz", "start_et", "nz_date", "us_et_date",
                     "sport", "game", "market_label", "pick",
                     "best_odds", "best_bookmaker", "avg_odds",
-                    "pinnacle", "tab_betcha", "bet365",
+                    "pinnacle", "pinnacle_gap_pct", "pinnacle_status", "tab_betcha", "bet365",
                     "price_lift_pct", "books", "reasons", "score_parts", "all_prices",
                 ]
                 st.dataframe(
-                    board[cols].style.format({"best_odds": "{:.2f}", "avg_odds": "{:.2f}", "price_lift_pct": "{:.2f}%"}),
+                    board[cols].style.format({"best_odds": "{:.2f}", "avg_odds": "{:.2f}", "price_lift_pct": "{:.2f}%", "pinnacle": "{:.2f}", "pinnacle_gap_pct": "{:.2f}%"}),
                     use_container_width=True,
                     hide_index=True,
                 )
@@ -1035,7 +1165,7 @@ def main():
                     st.info("No closest misses.")
                 else:
                     st.dataframe(
-                        missed[["decision", "score", "plain_explanation", "action", "time_status", "starts_in", "start_nz", "start_et", "market_label", "pick", "best_odds", "best_bookmaker", "price_lift_pct", "reasons", "all_prices"]].style.format({"best_odds": "{:.2f}", "price_lift_pct": "{:.2f}%"}),
+                        missed[["decision", "score", "plain_explanation", "action", "time_status", "starts_in", "start_nz", "start_et", "market_label", "pick", "best_odds", "best_bookmaker", "pinnacle", "pinnacle_gap_pct", "pinnacle_status", "price_lift_pct", "reasons", "all_prices"]].style.format({"best_odds": "{:.2f}", "pinnacle": "{:.2f}", "pinnacle_gap_pct": "{:.2f}%", "price_lift_pct": "{:.2f}%"}),
                         use_container_width=True,
                         hide_index=True,
                     )
@@ -1062,6 +1192,8 @@ def main():
                             "best_bookmaker": chosen["best_bookmaker"],
                             "avg_odds": chosen["avg_odds"],
                             "pinnacle": chosen["pinnacle"],
+                            "pinnacle_gap_pct": chosen["pinnacle_gap_pct"],
+                            "pinnacle_status": chosen["pinnacle_status"],
                             "tab_betcha": chosen["tab_betcha"],
                             "bet365": chosen["bet365"],
                             "price_lift_pct": chosen["price_lift_pct"],
@@ -1088,7 +1220,8 @@ def main():
         if not events_cards:
             st.info("Run Fetch NZ bettor board first, then come here.")
         else:
-            candidates_cards = build_candidates(events_cards, last_markets_cards, int(rules["min_minutes_before_start"]))
+            pinnacle_ref_cards = st.session_state.get("pinnacle_ref_v38", {}) if rules.get("show_pinnacle_reference") else {}
+            candidates_cards = build_candidates(events_cards, last_markets_cards, int(rules["min_minutes_before_start"]), pinnacle_ref_cards)
             rows_cards = []
             app_count_cards = approved_today_count(log_df)
             streak_cards = loss_streak_count(log_df)
@@ -1195,7 +1328,7 @@ def main():
                 st.error(f"Restore failed: {e}")
 
     st.divider()
-    st.caption("GOAT Shield Live v3.7.3 KEYERROR FIXED is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v3.8 PINNACLE REF is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":

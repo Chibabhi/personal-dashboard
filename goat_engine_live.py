@@ -1,5 +1,5 @@
 """
-GOAT Shield Live v3.7.3 KEYERROR FIXED
+GOAT Shield Live v3.8 PINNACLE REF
 Engine is embedded in app.py. This placeholder prevents old import/cache issues.
 """
-VERSION = "v3.7.3-keyerror-fixed"
+VERSION = "v3.8-pinnacle-ref"
