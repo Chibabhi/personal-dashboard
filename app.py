@@ -74,7 +74,7 @@ BET365_HINTS = ("bet365",)
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v3.7",
+    page_title="GOAT Shield Live v3.7.2 HARD RESET",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -810,7 +810,7 @@ def loss_streak_count(df):
 # UI
 # =========================================================
 def main():
-    st.title("🐐 GOAT Shield Live v3.7")
+    st.title("🐐 GOAT Shield Live v3.7.2 HARD RESET")
     st.caption("US National Sports Pack + NZD Decimal Odds + No Edge Gate + NZ Bettor Mode. Paper-only. No sportsbook login. No real-money auto-betting.")
 
     api_key_default = secret("ODDS_API_KEY", "")
@@ -1183,7 +1183,7 @@ def main():
                 st.error(f"Restore failed: {e}")
 
     st.divider()
-    st.caption("GOAT Shield Live v3.7 is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v3.7.2 HARD RESET is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":

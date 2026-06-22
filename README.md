@@ -1,23 +1,9 @@
-# GOAT Shield Live v3.7.1 — Fixed US National Sports Pack
+# GOAT Shield Live v3.7.2 HARD RESET
 
-This is the corrected v3.7 build.
+Use this when Streamlit is still showing the old v3.7 error.
 
-## Fix
+If deployed correctly, the app title will show:
 
-- Fixed KeyError for `min_decimal_odds`.
-- Keeps US National Sports Pack.
-- Keeps NZD decimal odds range.
-- Keeps no edge gate.
-- Keeps NZ Bettor Mode and mobile cards.
+GOAT Shield Live v3.7.2 HARD RESET
 
-## Sport presets
-
-- Single / manual
-- All US National Sports
-- Big 4 Pro Only
-- US Pro + MLS + WNBA
-- College Only
-
-## Safety
-
-Paper-only. No sportsbook login. No real-money auto-betting.
+Upload/replace all individual files in GitHub, then commit and reboot Streamlit.
