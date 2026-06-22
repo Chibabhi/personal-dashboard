@@ -1,4 +1,4 @@
-# iPhone install guide — v4.0 3-Source Alignment
+# iPhone install guide — v4.1 Auto Verify
 
 Unzip first. Do not upload only the ZIP to GitHub.
 
@@ -16,14 +16,11 @@ Then:
 3. If old version stays, clear cache/reboot.
 
 Success title:
-GOAT Shield Live v4.0 3-SOURCE ALIGNMENT
+GOAT Shield Live v4.1 AUTO VERIFY
 
 How to use:
 1. Run NZ Bettor Board.
-2. Open 🧠 3-Source Alignment.
-3. Select a pick/game.
-4. Fill Sports Alerts fields.
-5. Check Sports Chat Place.
-6. Check Picks & Parlays.
-7. Save 3-source alignment.
-8. Only paper-log picks. No real money.
+2. Wait 30–60 seconds.
+3. Press Fetch again.
+4. Open 🛡️ Auto Verify.
+5. Paper-log only HIGH confidence picks.

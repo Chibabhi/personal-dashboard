@@ -42,6 +42,11 @@ DEFAULT_RULES = {
     "pinnacle_score_bonus": True,
     "reject_red_flags": True,
     "apply_home_rules_to_team_markets": True,
+    "auto_verify_mode": True,
+    "lock_low_confidence": True,
+    "min_data_confidence_score": 75,
+    "max_stale_seconds": 180,
+    "max_line_move_pct": 3.0,
 }
 
 FALLBACK_SPORTS = {
@@ -77,7 +82,7 @@ BET365_HINTS = ("bet365",)
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v4.0 3-SOURCE ALIGNMENT",
+    page_title="GOAT Shield Live v4.1 AUTO VERIFY",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -345,6 +350,8 @@ def extract_price_rows(events: List[Dict[str, Any]], selected_markets: List[str]
         for bm in ev.get("bookmakers", []):
             bm_key = str(bm.get("key", ""))
             bm_title = str(bm.get("title", bm_key or "unknown"))
+            bm_last_update = str(bm.get("last_update", ""))
+            bm_last_update_dt = parse_api_datetime(bm_last_update)
             for mk in bm.get("markets", []):
                 mkey = str(mk.get("key", ""))
                 if mkey not in selected_markets:
@@ -376,6 +383,8 @@ def extract_price_rows(events: List[Dict[str, Any]], selected_markets: List[str]
                         "pick": make_pick_label(mkey, outcome, point),
                         "book_key": bm_key,
                         "book": bm_title,
+                        "book_last_update": bm_last_update,
+                        "book_last_update_dt": bm_last_update_dt,
                         "price": round(price, 3),
                     })
     return rows
@@ -544,6 +553,12 @@ def build_candidates(events: List[Dict[str, Any]], selected_markets: List[str], 
                 is_home_fav = False
 
             all_prices = sorted(group, key=lambda x: x["price"], reverse=True)
+            update_dts = [x.get("book_last_update_dt") for x in group if x.get("book_last_update_dt") is not None]
+            now_utc_for_age = datetime.now(timezone.utc)
+            oldest_update_dt = min(update_dts) if update_dts else None
+            newest_update_dt = max(update_dts) if update_dts else None
+            oldest_update_age_sec = round((now_utc_for_age - oldest_update_dt).total_seconds(), 0) if oldest_update_dt else None
+            newest_update_age_sec = round((now_utc_for_age - newest_update_dt).total_seconds(), 0) if newest_update_dt else None
             candidates.append({
                 "sport": best["sport_title"],
                 "sport_key": best["sport_key"],
@@ -581,6 +596,13 @@ def build_candidates(events: List[Dict[str, Any]], selected_markets: List[str], 
                 "home_pick": is_home,
                 "home_fav": is_home_fav,
                 "pinnacle_ok": bool(pin_best and best["price"] >= pin_best["price"]),
+                "market_win_pct": round(consensus_prob * 100, 2),
+                "best_implied_win_pct": round(implied * 100, 2),
+                "avg_implied_win_pct": round((1 / avg_odds) * 100, 2) if avg_odds > 1 else None,
+                "oldest_book_update": iso_z(oldest_update_dt) if oldest_update_dt else "",
+                "newest_book_update": iso_z(newest_update_dt) if newest_update_dt else "",
+                "oldest_book_update_age_sec": oldest_update_age_sec,
+                "newest_book_update_age_sec": newest_update_age_sec,
                 "all_prices": " | ".join([f'{x["book"]}: {x["price"]:.2f}' for x in all_prices[:8]]),
             })
     return candidates
@@ -822,6 +844,22 @@ def render_candidate_card(row: dict, idx: int):
             st.markdown(f"**Pinnacle reference:** {safe_float(pin, 0):.2f} | Gap: {safe_float(pin_gap, 0):+.2f}% | {pin_status}")
         else:
             st.markdown("**Pinnacle reference:** not available")
+
+        conf = str(row.get("data_confidence", "UNKNOWN"))
+        conf_score = int(safe_float(row.get("data_confidence_score", 0), 0))
+        market_win = safe_float(row.get("market_win_pct", 0), 0)
+        implied_win = safe_float(row.get("best_implied_win_pct", 0), 0)
+        data_age = str(row.get("data_age", "unknown"))
+        line_stability = str(row.get("line_stability", "No prior refresh comparison yet"))
+        st.markdown(f"**Auto Verify:** {conf} confidence ({conf_score}/100) | Market win %: {market_win:.2f}% | Best implied: {implied_win:.2f}%")
+        st.caption(f"Data age: {data_age} | Line check: {line_stability}")
+        if conf == "LOW":
+            st.warning(str(row.get("data_confidence_reasons", "Low data confidence")))
+        elif conf == "MEDIUM":
+            st.info(str(row.get("data_confidence_reasons", "Medium data confidence")))
+        else:
+            st.success("Auto Verify passed: " + str(row.get("data_confidence_passed", "High confidence")))
+
         st.markdown(f"**Time:** {status} • starts in **{starts_in}**")
         st.markdown(f"**NZ:** {start_nz}")
         st.markdown(f"**US ET:** {start_et}")
@@ -856,6 +894,199 @@ def mobile_card_dataframe(board: pd.DataFrame, mode: str, max_cards: int) -> pd.
         df = df[df["time_status"].astype(str).eq("Upcoming")]
         return df.sort_values(["sort", "score", "price_lift_pct"], ascending=[True, False, False]).head(max_cards)
     return df.sort_values(["sort", "time_locked", "score", "price_lift_pct"], ascending=[True, True, False, False]).head(max_cards)
+
+
+
+# =========================================================
+# AUTO VERIFY + DATA CONFIDENCE — v4.1
+# =========================================================
+def candidate_auto_key(c: Dict[str, Any]) -> str:
+    return "|".join([
+        str(c.get("sport_key", "")),
+        str(c.get("event_id", "")),
+        str(c.get("market", "")),
+        str(c.get("outcome", c.get("pick", ""))),
+        str(c.get("point", "")),
+        str(c.get("start", "")),
+    ])
+
+
+def age_label(seconds: Any) -> str:
+    if seconds is None or str(seconds) == "nan" or str(seconds) == "":
+        return "unknown"
+    try:
+        sec = float(seconds)
+    except Exception:
+        return "unknown"
+    if sec < 60:
+        return f"{int(sec)}s"
+    if sec < 3600:
+        return f"{int(sec // 60)}m {int(sec % 60)}s"
+    return f"{int(sec // 3600)}h {int((sec % 3600) // 60)}m"
+
+
+def confidence_class(score: float) -> str:
+    if score >= 85:
+        return "HIGH"
+    if score >= 70:
+        return "MEDIUM"
+    return "LOW"
+
+
+def confidence_parts(c: Dict[str, Any], rules: Dict[str, Any], previous: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    score = 100.0
+    passed = []
+    warnings = []
+
+    min_books = int(rules.get("min_books_compared", 5))
+    max_stale = float(rules.get("max_stale_seconds", 180))
+    max_line_move = float(rules.get("max_line_move_pct", 3.0))
+    min_odds = float(rules.get("min_decimal_odds", 1.40))
+    max_odds = float(rules.get("max_decimal_odds", 2.20))
+
+    books = int(c.get("books", 0))
+    if books >= min_books:
+        passed.append(f"{books} bookmakers compared")
+    else:
+        score -= 20
+        warnings.append(f"Only {books} bookmakers compared; minimum is {min_books}")
+
+    if c.get("pinnacle_available"):
+        gap = c.get("pinnacle_gap_pct")
+        if gap is None:
+            passed.append("Pinnacle available")
+        elif safe_float(gap, 0) >= 0:
+            passed.append(f"Best price near/above Pinnacle ({safe_float(gap, 0):+.2f}%)")
+        else:
+            score -= 10
+            warnings.append(f"Best price below Pinnacle ({safe_float(gap, 0):+.2f}%)")
+    else:
+        score -= 15
+        warnings.append("Pinnacle reference missing")
+
+    age = c.get("oldest_book_update_age_sec")
+    if age is None or str(age) == "nan" or age == "":
+        score -= 8
+        warnings.append("Bookmaker update timestamp missing")
+    else:
+        age_f = safe_float(age, 999999)
+        if age_f <= max_stale / 2:
+            passed.append(f"Bookmaker updates fresh enough: {age_label(age_f)}")
+        elif age_f <= max_stale:
+            score -= 5
+            warnings.append(f"Bookmaker updates getting older: {age_label(age_f)}")
+        else:
+            score -= 25
+            warnings.append(f"Bookmaker updates stale: {age_label(age_f)}")
+
+    if c.get("time_locked"):
+        score -= 35
+        warnings.append(str(c.get("time_status", "Time window locked")))
+    else:
+        passed.append(str(c.get("time_status", "Time window safe")))
+
+    best_odds = safe_float(c.get("best_odds", 0), 0)
+    if min_odds <= best_odds <= max_odds:
+        passed.append(f"Odds inside range {min_odds:.2f}-{max_odds:.2f}")
+    else:
+        score -= 20
+        warnings.append(f"Odds outside range {min_odds:.2f}-{max_odds:.2f}")
+
+    if c.get("home_pick"):
+        passed.append("Home pick confirmed")
+    else:
+        score -= 10
+        warnings.append("Not a home pick")
+
+    if c.get("home_fav"):
+        passed.append("Home favourite confirmed by market odds")
+    else:
+        score -= 12
+        warnings.append("Home favourite not confirmed")
+
+    line_move_pct = None
+    line_status = "No prior refresh comparison yet"
+    if previous and previous.get("best_odds"):
+        prev_odds = safe_float(previous.get("best_odds"), 0)
+        if prev_odds > 1 and best_odds > 1:
+            line_move_pct = round((best_odds / prev_odds - 1) * 100, 2)
+            if abs(line_move_pct) <= 0.25:
+                line_status = "Stable since last fetch"
+                passed.append(line_status)
+            elif abs(line_move_pct) <= max_line_move:
+                line_status = f"Moved {line_move_pct:+.2f}% since last fetch"
+                score -= 6
+                warnings.append(line_status)
+            else:
+                line_status = f"Large move {line_move_pct:+.2f}% since last fetch"
+                score -= 25
+                warnings.append(line_status)
+    else:
+        score -= 3
+        warnings.append("No previous fetch to verify line movement yet")
+
+    score = max(0, min(100, round(score, 0)))
+    conf = confidence_class(score)
+    reasons = " | ".join(warnings) if warnings else "All auto-verification checks passed"
+    passed_text = " | ".join(passed) if passed else "No strong verification positives yet"
+
+    return {
+        "data_confidence_score": int(score),
+        "data_confidence": conf,
+        "data_confidence_reasons": reasons,
+        "data_confidence_passed": passed_text,
+        "line_move_pct_since_last_fetch": line_move_pct,
+        "line_stability": line_status,
+        "source_stack": "The Odds API market data + Pinnacle reference + internal implied probability/home-favourite checks",
+        "data_age": age_label(c.get("oldest_book_update_age_sec")),
+    }
+
+
+def apply_auto_verify_to_rows(rows: List[Dict[str, Any]], rules: Dict[str, Any], update_snapshot: bool = False) -> List[Dict[str, Any]]:
+    previous_snapshot = st.session_state.get("candidate_snapshot_v41", {})
+    new_snapshot: Dict[str, Dict[str, Any]] = {}
+    out = []
+
+    for row in rows:
+        r = dict(row)
+        key = candidate_auto_key(r)
+        previous = previous_snapshot.get(key)
+        verify = confidence_parts(r, rules, previous)
+        r.update(verify)
+
+        if rules.get("auto_verify_mode", True):
+            min_conf = int(rules.get("min_data_confidence_score", 75))
+            if rules.get("lock_low_confidence", True) and int(r.get("data_confidence_score", 0)) < min_conf:
+                if "APPROVED" in str(r.get("decision", "")) or "ELITE" in str(r.get("decision", "")):
+                    r["decision"] = "WATCHLIST — LOW DATA CONFIDENCE"
+                    r["reject_bucket"] = "Low data confidence"
+                    r["reasons"] = f"Auto Verify confidence {r.get('data_confidence_score')}/100 below required {min_conf}. {r.get('data_confidence_reasons')}"
+                    r["plain_explanation"] = "Auto Verify blocked this from paper approval because data confidence is not high enough. " + str(r.get("data_confidence_reasons", ""))
+                    r["action"] = "Do not paper-log yet. Refresh later or wait for stronger data confidence."
+
+        new_snapshot[key] = {
+            "best_odds": r.get("best_odds"),
+            "pinnacle": r.get("pinnacle"),
+            "fetched_at": iso_z(datetime.now(timezone.utc)),
+        }
+        out.append(r)
+
+    if update_snapshot:
+        st.session_state["candidate_snapshot_v41"] = new_snapshot
+        st.session_state["last_auto_verify_utc_v41"] = iso_z(datetime.now(timezone.utc))
+
+    return out
+
+
+def auto_verify_summary(board: pd.DataFrame) -> Dict[str, Any]:
+    if board.empty or "data_confidence" not in board.columns:
+        return {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    counts = board["data_confidence"].value_counts().to_dict()
+    return {
+        "HIGH": int(counts.get("HIGH", 0)),
+        "MEDIUM": int(counts.get("MEDIUM", 0)),
+        "LOW": int(counts.get("LOW", 0)),
+    }
 
 
 # =========================================================
@@ -1143,8 +1374,8 @@ def render_public_proof_badge(row: Dict[str, Any]) -> None:
 
 
 def main():
-    st.title("🐐 GOAT Shield Live v4.0 3-SOURCE ALIGNMENT")
-    st.caption("Sports Alerts + Sports Chat Place + Picks & Parlays alignment mode. Pinnacle reference + NZD Decimal Odds + NZ Bettor Mode. Paper-only.")
+    st.title("🐐 GOAT Shield Live v4.1 AUTO VERIFY")
+    st.caption("Auto Verify + Data Confidence Mode. Odds API + Pinnacle reference + market-implied win % + NZ Bettor Mode. Paper-only.")
 
     api_key_default = secret("ODDS_API_KEY", "")
 
@@ -1250,6 +1481,11 @@ def main():
         rules.setdefault("pinnacle_score_bonus", True)
         rules.setdefault("reject_red_flags", True)
         rules.setdefault("apply_home_rules_to_team_markets", True)
+        rules.setdefault("auto_verify_mode", True)
+        rules.setdefault("lock_low_confidence", True)
+        rules.setdefault("min_data_confidence_score", 75)
+        rules.setdefault("max_stale_seconds", 180)
+        rules.setdefault("max_line_move_pct", 3.0)
         rules["min_decimal_odds"] = st.number_input("Min NZD decimal odds", 1.01, 10.0, float(rules["min_decimal_odds"]), 0.01)
         rules["max_decimal_odds"] = st.number_input("Max NZD decimal odds", 1.01, 10.0, float(rules["max_decimal_odds"]), 0.01)
         rules["min_books_compared"] = st.number_input("Minimum bookmakers compared", 1, 20, int(rules["min_books_compared"]), 1)
@@ -1267,6 +1503,39 @@ def main():
         )
         rules["reject_red_flags"] = st.checkbox("Reject any manual red flag", True)
 
+        st.markdown("### Auto Verify")
+        rules["auto_verify_mode"] = st.checkbox(
+            "Auto Verify + Data Confidence Mode",
+            bool(rules.get("auto_verify_mode", True)),
+            help="Uses odds source quality, Pinnacle, bookmaker count, line movement, freshness, and home-favourite rules.",
+        )
+        rules["lock_low_confidence"] = st.checkbox(
+            "Block approved picks if confidence is low",
+            bool(rules.get("lock_low_confidence", True)),
+        )
+        rules["min_data_confidence_score"] = st.slider(
+            "Minimum data confidence score",
+            50,
+            95,
+            int(rules.get("min_data_confidence_score", 75)),
+            5,
+        )
+        rules["max_stale_seconds"] = st.number_input(
+            "Max bookmaker data age in seconds",
+            30,
+            1800,
+            int(rules.get("max_stale_seconds", 180)),
+            30,
+        )
+        rules["max_line_move_pct"] = st.number_input(
+            "Max allowed line move % between refreshes",
+            0.25,
+            20.0,
+            float(rules.get("max_line_move_pct", 3.0)),
+            0.25,
+        )
+        st.caption("For best verification, press Fetch twice 30–60 seconds apart and compare line movement.")
+
         st.markdown("### Manual red flags")
         flags = {
             "injury_red": st.checkbox("Injury/news red flag", False),
@@ -1279,7 +1548,7 @@ def main():
 
     log_df = load_log()
 
-    tabs = st.tabs(["🇳🇿 NZ Bettor Board", "📱 Mobile Cards", "🧠 3-Source Alignment", "🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "🛡️ Backup"])
+    tabs = st.tabs(["🇳🇿 NZ Bettor Board", "📱 Mobile Cards", "🛡️ Auto Verify", "🧠 3-Source Alignment", "🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "🛡️ Backup"])
 
     with tabs[0]:
         st.subheader("🇳🇿 NZ Bettor Board")
@@ -1332,6 +1601,7 @@ def main():
             st.session_state["metas_v36"] = metas
             st.session_state["pinnacle_metas_v38"] = pinnacle_metas
             st.session_state["rules_v36"] = rules
+            st.session_state["last_fetch_utc_v41"] = iso_z(datetime.now(timezone.utc))
 
             for e in errors:
                 st.error(e)
@@ -1355,6 +1625,8 @@ def main():
                 r.update({"decision": decision, "score": score, "reject_bucket": bucket, "reasons": reason, "plain_explanation": plain, "action": action, "score_parts": score_parts})
                 rows.append(r)
 
+            rows = apply_auto_verify_to_rows(rows, rules, update_snapshot=True)
+
             if not rows:
                 st.warning("No price candidates found. Try another sport, market, region, or time filter.")
             else:
@@ -1368,6 +1640,14 @@ def main():
                 c2.metric("Approved/Elite", approved_n)
                 c3.metric("Watchlist", watch_n)
                 c4.metric("Rejected/Locked", reject_n)
+
+                conf_counts = auto_verify_summary(pd.DataFrame(rows))
+                v1, v2, v3, v4 = st.columns(4)
+                v1.metric("Data confidence HIGH", conf_counts.get("HIGH", 0))
+                v2.metric("MEDIUM", conf_counts.get("MEDIUM", 0))
+                v3.metric("LOW", conf_counts.get("LOW", 0))
+                v4.metric("Last fetch NZ", fmt_dt(parse_api_datetime(st.session_state.get("last_fetch_utc_v41", "")), NZ_TZ, "NZ") if st.session_state.get("last_fetch_utc_v41") else "—")
+                st.caption("Sources: The Odds API market odds + The Odds API Pinnacle reference + internal implied probability, home favourite, freshness, and line-movement checks.")
 
                 if approved_n == 0:
                     text = ", ".join([f"{k}: {v}" for k, v in summary.most_common(6)]) or "No clean no-edge rule pass"
@@ -1384,11 +1664,13 @@ def main():
                     "start_nz", "start_et", "nz_date", "us_et_date",
                     "sport", "game", "market_label", "pick",
                     "best_odds", "best_bookmaker", "avg_odds",
+                    "market_win_pct", "best_implied_win_pct",
                     "pinnacle", "pinnacle_gap_pct", "pinnacle_status", "tab_betcha", "bet365",
-                    "price_lift_pct", "books", "reasons", "score_parts", "all_prices",
+                    "data_confidence", "data_confidence_score", "data_age", "line_stability",
+                    "price_lift_pct", "books", "reasons", "data_confidence_reasons", "score_parts", "all_prices",
                 ]
                 st.dataframe(
-                    board[cols].style.format({"best_odds": "{:.2f}", "avg_odds": "{:.2f}", "price_lift_pct": "{:.2f}%", "pinnacle": "{:.2f}", "pinnacle_gap_pct": "{:.2f}%"}),
+                    board[cols].style.format({"best_odds": "{:.2f}", "avg_odds": "{:.2f}", "market_win_pct": "{:.2f}%", "best_implied_win_pct": "{:.2f}%", "price_lift_pct": "{:.2f}%", "pinnacle": "{:.2f}", "pinnacle_gap_pct": "{:.2f}%"}),
                     use_container_width=True,
                     hide_index=True,
                 )
@@ -1402,7 +1684,7 @@ def main():
                     st.info("No closest misses.")
                 else:
                     st.dataframe(
-                        missed[["decision", "score", "plain_explanation", "action", "time_status", "starts_in", "start_nz", "start_et", "market_label", "pick", "best_odds", "best_bookmaker", "pinnacle", "pinnacle_gap_pct", "pinnacle_status", "price_lift_pct", "reasons", "all_prices"]].style.format({"best_odds": "{:.2f}", "pinnacle": "{:.2f}", "pinnacle_gap_pct": "{:.2f}%", "price_lift_pct": "{:.2f}%"}),
+                        missed[["decision", "score", "data_confidence", "data_confidence_score", "plain_explanation", "action", "time_status", "starts_in", "start_nz", "start_et", "market_label", "pick", "best_odds", "best_bookmaker", "pinnacle", "pinnacle_gap_pct", "pinnacle_status", "price_lift_pct", "reasons", "data_confidence_reasons", "all_prices"]].style.format({"best_odds": "{:.2f}", "pinnacle": "{:.2f}", "pinnacle_gap_pct": "{:.2f}%", "price_lift_pct": "{:.2f}%"}),
                         use_container_width=True,
                         hide_index=True,
                     )
@@ -1438,6 +1720,13 @@ def main():
                             "score": chosen["score"],
                             "plain_explanation": chosen.get("plain_explanation", ""),
                             "score_parts": chosen.get("score_parts", ""),
+                            "data_confidence": chosen.get("data_confidence", ""),
+                            "data_confidence_score": chosen.get("data_confidence_score", ""),
+                            "data_confidence_reasons": chosen.get("data_confidence_reasons", ""),
+                            "market_win_pct": chosen.get("market_win_pct", ""),
+                            "best_implied_win_pct": chosen.get("best_implied_win_pct", ""),
+                            "line_stability": chosen.get("line_stability", ""),
+                            "data_age": chosen.get("data_age", ""),
                             "three_source_alignment": proof_summary_text(get_public_proof(chosen)),
                             "result": "Pending",
                             "profit_units": "",
@@ -1468,6 +1757,7 @@ def main():
                 rr = dict(cand)
                 rr.update({"decision": decision, "score": score, "reject_bucket": bucket, "reasons": reason, "plain_explanation": plain, "action": action, "score_parts": score_parts})
                 rows_cards.append(rr)
+            rows_cards = apply_auto_verify_to_rows(rows_cards, rules, update_snapshot=False)
             if not rows_cards:
                 st.warning("No card candidates found.")
             else:
@@ -1484,6 +1774,76 @@ def main():
                         render_candidate_card(card_row.to_dict(), n)
 
     with tabs[2]:
+        st.subheader("🛡️ Auto Verify + Data Confidence")
+        st.info("This is the automatic source-quality check. It does not use Sports Alerts, Sports Chat Place, or Picks & Parlays as required inputs.")
+
+        events_verify = st.session_state.get("events_v36", [])
+        last_markets_verify = st.session_state.get("markets_v36", markets)
+        if not events_verify:
+            st.info("Run Fetch NZ bettor board first, then come here.")
+        else:
+            pinnacle_ref_verify = st.session_state.get("pinnacle_ref_v38", {}) if rules.get("show_pinnacle_reference") else {}
+            candidates_verify = build_candidates(events_verify, last_markets_verify, int(rules["min_minutes_before_start"]), pinnacle_ref_verify)
+
+            rows_verify = []
+            app_count_verify = approved_today_count(log_df)
+            streak_verify = loss_streak_count(log_df)
+
+            for cand in candidates_verify:
+                decision, score, bucket, reason, plain, action, score_parts = decide(cand, rules, flags, app_count_verify, streak_verify)
+                rr = dict(cand)
+                rr.update({
+                    "decision": decision,
+                    "score": score,
+                    "reject_bucket": bucket,
+                    "reasons": reason,
+                    "plain_explanation": plain,
+                    "action": action,
+                    "score_parts": score_parts,
+                })
+                rows_verify.append(rr)
+
+            rows_verify = apply_auto_verify_to_rows(rows_verify, rules, update_snapshot=False)
+            verify_df = pd.DataFrame(rows_verify)
+            if verify_df.empty:
+                st.warning("No candidates to verify.")
+            else:
+                counts = auto_verify_summary(verify_df)
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("HIGH", counts.get("HIGH", 0))
+                c2.metric("MEDIUM", counts.get("MEDIUM", 0))
+                c3.metric("LOW", counts.get("LOW", 0))
+                c4.metric("Last fetch", fmt_dt(parse_api_datetime(st.session_state.get("last_fetch_utc_v41", "")), NZ_TZ, "NZ") if st.session_state.get("last_fetch_utc_v41") else "—")
+
+                st.markdown("#### Source hierarchy")
+                st.write("Tier 1: The Odds API market odds and bookmaker data")
+                st.write("Tier 2: Pinnacle reference via The Odds API")
+                st.write("Tier 3: Internal calculated market-implied win %, home favourite, freshness, and line movement")
+                st.write("Tier 4: Sports Alerts / Sports Chat Place / Picks & Parlays are optional manual notes only")
+
+                verify_df["sort"] = verify_df["data_confidence"].map({"HIGH": 0, "MEDIUM": 1, "LOW": 2}).fillna(9)
+                verify_df = verify_df.sort_values(["sort", "data_confidence_score", "score"], ascending=[True, False, False]).reset_index(drop=True)
+                show_cols = [
+                    "data_confidence", "data_confidence_score", "decision", "score",
+                    "sport", "game", "pick", "best_odds", "market_win_pct", "best_implied_win_pct",
+                    "pinnacle", "pinnacle_gap_pct", "books", "data_age", "line_stability",
+                    "data_confidence_reasons", "data_confidence_passed",
+                ]
+                st.dataframe(
+                    verify_df[show_cols].style.format({
+                        "best_odds": "{:.2f}",
+                        "market_win_pct": "{:.2f}%",
+                        "best_implied_win_pct": "{:.2f}%",
+                        "pinnacle": "{:.2f}",
+                        "pinnacle_gap_pct": "{:.2f}%",
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                st.caption("Tip: press Fetch again after 30–60 seconds. Auto Verify will compare line movement since the previous fetch.")
+
+    with tabs[3]:
         st.subheader("🧠 3-Source Alignment")
         st.info("Use this exactly like your manual system: Sports Alerts first, then Sports Chat Place, then Picks & Parlays. This does not scrape public-pick sites and does not make them the main decision maker.")
 
@@ -1512,6 +1872,8 @@ def main():
                     "score_parts": score_parts,
                 })
                 rows_proof.append(rr)
+
+            rows_proof = apply_auto_verify_to_rows(rows_proof, rules, update_snapshot=False)
 
             if not rows_proof:
                 st.warning("No candidates available for public proof.")
@@ -1671,12 +2033,12 @@ def main():
                 if public_heavy:
                     st.warning("Public-heavy risk marked. Treat this as a red flag. Do not turn this into a real bet.")
 
-    with tabs[3]:
+    with tabs[4]:
         st.subheader("🟢 Best Price Board")
         st.write("Use the NZ Bettor Board first. It includes all best-price board columns plus NZ/US time conversion.")
         st.caption("v3.3 keeps this tab as a simple explanation so the phone UI stays cleaner.")
 
-    with tabs[4]:
+    with tabs[5]:
         st.subheader("📒 Paper Log")
         df = load_log()
         if df.empty:
@@ -1685,7 +2047,7 @@ def main():
             st.dataframe(df, use_container_width=True)
             st.download_button("Download CSV", df.to_csv(index=False).encode("utf-8"), "goat_shield_paper_log.csv", "text/csv")
 
-    with tabs[5]:
+    with tabs[6]:
         st.subheader("✅ Results")
         df = load_log()
         if df.empty or "result" not in df.columns:
@@ -1711,7 +2073,7 @@ def main():
                     st.success("Saved.")
                     st.rerun()
 
-    with tabs[6]:
+    with tabs[7]:
         st.subheader("📊 Dashboard")
         df = load_log()
         if df.empty:
@@ -1737,7 +2099,7 @@ def main():
                 st.subheader("Performance by market")
                 st.dataframe(df.groupby("market", dropna=False).size().reset_index(name="paper_picks"), use_container_width=True)
 
-    with tabs[7]:
+    with tabs[8]:
         st.subheader("🛡️ Backup")
         df = load_log()
         if not df.empty:
@@ -1754,7 +2116,7 @@ def main():
                 st.error(f"Restore failed: {e}")
 
     st.divider()
-    st.caption("GOAT Shield Live v4.0 3-SOURCE ALIGNMENT is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v4.1 AUTO VERIFY is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":

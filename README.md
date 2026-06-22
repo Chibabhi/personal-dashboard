@@ -1,40 +1,44 @@
-# GOAT Shield Live v4.0 — 3-Source Alignment Mode
+# GOAT Shield Live v4.1 — Auto Verify + Data Confidence Mode
 
-This version matches Abhi's manual operating style:
+This version reduces manual work and makes the app show why it trusts or blocks a pick.
 
-1. Sports Alerts
-2. Sports Chat Place
-3. Picks & Parlays
+## v4.1 upgrade
 
-## New v4.0 features
+Adds automatic verification using:
 
-- New 🧠 3-Source Alignment tab.
-- Sports Alerts manual input:
-  - checked yes/no
-  - home favourite yes/no
-  - win percentage
-  - minimum win percentage threshold
-  - odds shown
-  - pick compared with candidate
-- Sports Chat Place result compared with candidate.
-- Picks & Parlays result compared with candidate.
-- Automatic alignment verdict:
-  - FULL GOAT ALIGNMENT
-  - PARTIAL ALIGNMENT
-  - SPORTS ALERTS ONLY — WATCHLIST
-  - WATCHLIST ONLY
-  - REJECT — SOURCE CONFLICT
-- Parlay leg status:
-  - PARLAY LEG ELIGIBLE — paper only, max 2 legs
-  - NOT PARLAY ELIGIBLE
-- Mobile Cards show the saved alignment badge.
-- Paper Log stores the 3-source alignment summary.
+- The Odds API market odds
+- Pinnacle reference from The Odds API
+- Bookmaker count
+- Bookmaker last update timestamps
+- Home pick / home favourite check
+- NZ time safety lock
+- Odds range 1.40–2.20
+- Market-implied win percentage
+- Best-price implied win percentage
+- Line movement comparison between refreshes
+
+## New fields
+
+- Data confidence: HIGH / MEDIUM / LOW
+- Data confidence score /100
+- Data age
+- Line stability
+- Market win %
+- Best implied win %
+- Auto Verify reasons
+- Auto Verify passed checks
+
+## Best use
+
+1. Fetch the board.
+2. Wait 30–60 seconds.
+3. Fetch again.
+4. Open Auto Verify tab.
+5. Only paper-log picks with HIGH confidence.
 
 ## Important
 
-This still does not scrape any public-pick site.
-It does not log into sportsbooks.
-It does not auto-bet.
-It is for paper proof only.
+Sports Alerts, Sports Chat Place, and Picks & Parlays remain optional proof notes only.
+This app does not scrape them and does not use them as automatic truth sources.
 
-Use it as a strict filter, not a reason to bet more.
+Paper-only. No sportsbook login. No auto-betting.
