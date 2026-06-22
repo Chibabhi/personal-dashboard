@@ -1,45 +1,18 @@
-# GOAT Shield Live v3.5 — GOAT Score
+# GOAT Shield Live v3.6 — NZD Decimal Odds + No Edge Gate
 
-NZ Bettor Mode + Best Price Board + Mobile Cards + GOAT Score.
+This version removes edge from the decision system.
 
-## v3.5 upgrades
+## Changed
+- Odds range is labelled as NZD Decimal Odds.
+- Removed minimum edge rule.
+- Removed edge-based rejection.
+- GOAT Score uses decimal odds range, bookmaker price comparison, number of books, NZ/US time safety, home/favourite rules, red flags, and discipline.
+- Mobile cards explain decisions without edge language.
 
-- Adds GOAT Score out of 100.
-- Adds plain-English pick explanation.
-- Adds clear action label:
-  - Do not log / do not bet
-  - Watch only
-  - Log as PAPER pick only
-  - Log as ELITE paper pick only
-- Adds score breakdown:
-  - Edge quality
-  - Odds range
-  - Bookmaker support
-  - Time safety
-  - GOAT rules
-  - Discipline
-- Adds cleaner mobile card explanations.
-- Keeps NZ time and US Eastern time side by side.
-- Keeps paper-only safety.
-
-## GOAT Score guide
-
-- 0–59 = Reject
-- 60–74 = Watchlist
-- 75–84 = Approved paper pick
-- 85+ = Elite paper pick
+## NZD decimal odds note
+Decimal odds are return multipliers, not currency amounts.
+NZ$10 at 1.80 returns NZ$18 total.
+NZ$10 at 2.20 returns NZ$22 total.
 
 ## Safety
-
-This app does not:
-- place real-money bets
-- log into sportsbooks
-- scrape betting websites
-- bypass betting rules
-- store bank/card details
-
-## Streamlit Secrets
-
-```toml
-ODDS_API_KEY = "your_real_key_here"
-```
+Paper-only. No real-money betting. No sportsbook login. No scraping. No bank/card details.

@@ -1,4 +1,4 @@
-# iPhone install guide — v3.5 GOAT Score
+# iPhone install guide — v3.6
 
 Upload/replace these files in GitHub:
 
@@ -12,7 +12,7 @@ Then:
 1. Commit changes.
 2. Streamlit > Manage app > Reboot app.
 3. Open app.
-4. You should see: GOAT Shield Live v3.5
+4. You should see: GOAT Shield Live v3.6
 
 Best first settings:
 - Active sports: MLB only
@@ -20,17 +20,10 @@ Best first settings:
 - Regions: us only
 - Time filter: NZ Bettor Mode: Next 24 hours
 - Lock if game starts within minutes: 90
-- Min odds: 1.40
-- Max odds: 2.20
-- Min edge: 2.00
+- Min NZD decimal odds: 1.40
+- Max NZD decimal odds: 2.20
+- Minimum bookmakers compared: 5
 - Require home team: ON
 - Require home favourite: ON
 - Require Pinnacle value: OFF
 - Red flags: OFF unless genuinely true
-
-How to use:
-1. Go to 🇳🇿 NZ Bettor Board.
-2. Press Fetch NZ bettor board.
-3. Open 📱 Mobile Cards.
-4. Read GOAT Score + plain explanation.
-5. Only log Approved / Elite paper picks.
