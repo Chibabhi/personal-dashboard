@@ -1,4 +1,4 @@
-# iPhone install guide — v4.3 Health Check
+# iPhone install guide — v4.4 Picks Mode
 
 Unzip first. Do not upload only the ZIP to GitHub.
 
@@ -16,12 +16,12 @@ Then:
 3. If old version stays, clear cache/reboot.
 
 Success title:
-GOAT Shield Live v4.3 HEALTH CHECK
+GOAT Shield Live v4.4 PICKS MODE
 
-How to use Health Check:
-1. Run NZ Bettor Board.
-2. Fetch once.
-3. Wait 30–60 seconds.
-4. Fetch again.
-5. Open ℹ️ Health Check.
-6. Check app status, command guide, and daily checklist.
+How to use:
+1. Fetch NZ Bettor Board.
+2. Wait 30–60 seconds.
+3. Fetch again.
+4. Open 🎯 Picks.
+5. Press 🎯 Picks — show qualifying paper picks.
+6. Use paper-log only.

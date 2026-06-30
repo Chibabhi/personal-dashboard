@@ -30,11 +30,11 @@ ET_TZ_NAME = "America/New_York"
 
 DEFAULT_RULES = {
     "min_decimal_odds": 1.40,
-    "max_decimal_odds": 2.20,
+    "max_decimal_odds": 1.90,
     "min_books_compared": 5,
     "max_daily": 3,
     "lock_losses": 3,
-    "min_minutes_before_start": 90,
+    "min_minutes_before_start": 0,
     "require_home_pick": True,
     "require_home_favourite": True,
     "require_pinnacle_value": False,
@@ -51,6 +51,9 @@ DEFAULT_RULES = {
     "require_high_confidence_to_log": True,
     "allow_full_alignment_override": True,
     "allow_partial_alignment_watchlist_log": False,
+    "post_start_grace_minutes": 5,
+    "hide_after_post_start_grace": True,
+    "picks_mode_high_conf_only": True,
 }
 
 FALLBACK_SPORTS = {
@@ -86,7 +89,7 @@ BET365_HINTS = ("bet365",)
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v4.3 HEALTH CHECK",
+    page_title="GOAT Shield Live v4.4 PICKS MODE",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -211,14 +214,19 @@ def starts_in_text(dt: Optional[datetime]) -> str:
     return f"{days}d {hours % 24}h"
 
 
-def game_time_status(dt: Optional[datetime], min_minutes: int) -> Tuple[str, bool]:
+def game_time_status(dt: Optional[datetime], min_minutes: int, post_start_grace_minutes: int = 5) -> Tuple[str, bool]:
     if dt is None:
         return "Unknown time", False
     now = datetime.now(timezone.utc)
     diff_min = (dt - now).total_seconds() / 60
+
+    # User rule: show qualifying paper picks until start, or up to 5 minutes into the game.
+    if diff_min < -post_start_grace_minutes:
+        return f"Past +{post_start_grace_minutes}m / hidden", True
     if diff_min < 0:
-        return "Started / locked", True
-    if diff_min <= min_minutes:
+        return f"Live first {post_start_grace_minutes}m only / paper-only", False
+
+    if min_minutes > 0 and diff_min <= min_minutes:
         return f"Too close / locked (≤{min_minutes}m)", True
     return "Upcoming", False
 
@@ -501,7 +509,7 @@ def pinnacle_compare_status(best_odds: float, pinnacle_odds: Optional[float]) ->
 
 
 
-def build_candidates(events: List[Dict[str, Any]], selected_markets: List[str], min_minutes_before_start: int, pinnacle_ref: Optional[Dict[Tuple, Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+def build_candidates(events: List[Dict[str, Any]], selected_markets: List[str], min_minutes_before_start: int, pinnacle_ref: Optional[Dict[Tuple, Dict[str, Any]]] = None, post_start_grace_minutes: int = 5) -> List[Dict[str, Any]]:
     rows = extract_price_rows(events, selected_markets)
     by_event = defaultdict(list)
     for r in rows:
@@ -516,7 +524,11 @@ def build_candidates(events: List[Dict[str, Any]], selected_markets: List[str], 
         home = ev_rows[0]["home"]
         away = ev_rows[0]["away"]
         start_dt = ev_rows[0]["start_utc_dt"]
-        status, time_locked = game_time_status(start_dt, min_minutes_before_start)
+        now_for_window = datetime.now(timezone.utc)
+        if start_dt is not None and (now_for_window - start_dt).total_seconds() / 60 > post_start_grace_minutes:
+            # User rule: after the +5 minute grace window, do not show this game at all.
+            continue
+        status, time_locked = game_time_status(start_dt, min_minutes_before_start, post_start_grace_minutes)
 
         by_pick = defaultdict(list)
         for r in ev_rows:
@@ -575,6 +587,7 @@ def build_candidates(events: List[Dict[str, Any]], selected_markets: List[str], 
                 "starts_in": starts_in_text(start_dt),
                 "time_status": status,
                 "time_locked": time_locked,
+                "post_start_grace_minutes": post_start_grace_minutes,
                 "game": f'{best["away"]} @ {best["home"]}',
                 "home": best["home"],
                 "away": best["away"],
@@ -1490,8 +1503,8 @@ def render_public_proof_badge(row: Dict[str, Any]) -> None:
 
 
 def main():
-    st.title("🐐 GOAT Shield Live v4.3 HEALTH CHECK")
-    st.caption("Health Check + Alignment Lock + Auto Verify. Shows app status, commands, source checks, and daily safety checklist. Paper-only.")
+    st.title("🐐 GOAT Shield Live v4.4 PICKS MODE")
+    st.caption("Picks Mode + Latest Data Guard. Shows only qualifying paper picks in 1.40-1.90 odds range, up to 5 minutes after start. Paper-only.")
 
     api_key_default = secret("ODDS_API_KEY", "")
 
@@ -1606,12 +1619,38 @@ def main():
         rules.setdefault("require_high_confidence_to_log", True)
         rules.setdefault("allow_full_alignment_override", True)
         rules.setdefault("allow_partial_alignment_watchlist_log", False)
+        rules.setdefault("post_start_grace_minutes", 5)
+        rules.setdefault("hide_after_post_start_grace", True)
+        rules.setdefault("picks_mode_high_conf_only", True)
         rules["min_decimal_odds"] = st.number_input("Min NZD decimal odds", 1.01, 10.0, float(rules["min_decimal_odds"]), 0.01)
         rules["max_decimal_odds"] = st.number_input("Max NZD decimal odds", 1.01, 10.0, float(rules["max_decimal_odds"]), 0.01)
         rules["min_books_compared"] = st.number_input("Minimum bookmakers compared", 1, 20, int(rules["min_books_compared"]), 1)
         rules["max_daily"] = st.number_input("Max approved paper picks per NZ day", 1, 20, int(rules["max_daily"]), 1)
         rules["lock_losses"] = st.number_input("Loss-streak lockout", 1, 20, int(rules["lock_losses"]), 1)
-        rules["min_minutes_before_start"] = st.number_input("Lock if game starts within minutes", 0, 240, int(rules["min_minutes_before_start"]), 5)
+        rules["min_minutes_before_start"] = st.number_input(
+            "Lock before start within minutes",
+            0,
+            240,
+            int(rules["min_minutes_before_start"]),
+            5,
+            help="Default is 0 in v4.4 because Picks Mode can show picks until start, and up to 5 minutes after start.",
+        )
+        rules["post_start_grace_minutes"] = st.number_input(
+            "Show picks until minutes after start",
+            0,
+            30,
+            int(rules.get("post_start_grace_minutes", 5)),
+            1,
+            help="User rule: after this window, the game is hidden and no pick is shown.",
+        )
+        rules["hide_after_post_start_grace"] = st.checkbox(
+            "Hide games after grace window",
+            bool(rules.get("hide_after_post_start_grace", True)),
+        )
+        rules["picks_mode_high_conf_only"] = st.checkbox(
+            "Picks tab: HIGH confidence only",
+            bool(rules.get("picks_mode_high_conf_only", True)),
+        )
         rules["apply_home_rules_to_team_markets"] = st.checkbox("Apply home rules to team markets only", True)
         rules["require_home_pick"] = st.checkbox("Require team-market pick to be home team", True)
         rules["require_home_favourite"] = st.checkbox("Require home favourite for team markets", True)
@@ -1688,7 +1727,7 @@ def main():
 
     log_df = load_log()
 
-    tabs = st.tabs(["🇳🇿 NZ Bettor Board", "📱 Mobile Cards", "🛡️ Auto Verify", "🔒 Alignment Lock", "🧠 3-Source Alignment", "🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "🛡️ Backup", "ℹ️ Health Check"])
+    tabs = st.tabs(["🇳🇿 NZ Bettor Board", "🎯 Picks", "📱 Mobile Cards", "🛡️ Auto Verify", "🔒 Alignment Lock", "🧠 3-Source Alignment", "🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "🛡️ Backup", "ℹ️ Health Check"])
 
     with tabs[0]:
         st.subheader("🇳🇿 NZ Bettor Board")
@@ -1709,6 +1748,10 @@ def main():
                 st.stop()
 
             start, end = time_window(time_filter)
+            if start and rules.get("hide_after_post_start_grace", True):
+                start_dt_for_grace = parse_api_datetime(start)
+                if start_dt_for_grace is not None:
+                    start = iso_z(start_dt_for_grace - timedelta(minutes=int(rules.get("post_start_grace_minutes", 5))))
             events = []
             metas = []
             errors = []
@@ -1754,7 +1797,7 @@ def main():
 
         if events:
             pinnacle_ref = st.session_state.get("pinnacle_ref_v38", {}) if rules.get("show_pinnacle_reference") else {}
-            candidates = build_candidates(events, last_markets, int(rules["min_minutes_before_start"]), pinnacle_ref)
+            candidates = build_candidates(events, last_markets, int(rules["min_minutes_before_start"]), pinnacle_ref, int(rules.get("post_start_grace_minutes", 5)))
             rows = []
             app_count = approved_today_count(log_df)
             streak = loss_streak_count(log_df)
@@ -1916,6 +1959,112 @@ def main():
                             st.rerun()
 
     with tabs[1]:
+        st.subheader("🎯 Picks — qualifying paper picks only")
+        st.warning("Paper-only. This tab is not a real-money betting screen. It only shows candidates that pass your current rules and Alignment Lock.")
+
+        events_picks = st.session_state.get("events_v36", [])
+        last_markets_picks = st.session_state.get("markets_v36", markets)
+        if not events_picks:
+            st.info("Run Fetch NZ bettor board first. Then come back here and press Picks.")
+        else:
+            if st.button("🎯 Picks — show qualifying paper picks"):
+                st.session_state["show_picks_v44"] = True
+
+            if st.session_state.get("show_picks_v44", False):
+                pinnacle_ref_picks = st.session_state.get("pinnacle_ref_v38", {}) if rules.get("show_pinnacle_reference") else {}
+                candidates_picks = build_candidates(
+                    events_picks,
+                    last_markets_picks,
+                    int(rules["min_minutes_before_start"]),
+                    pinnacle_ref_picks,
+                    int(rules.get("post_start_grace_minutes", 5)),
+                )
+
+                rows_picks = []
+                app_count_picks = approved_today_count(log_df)
+                streak_picks = loss_streak_count(log_df)
+
+                for cand in candidates_picks:
+                    decision, score, bucket, reason, plain, action, score_parts = decide(cand, rules, flags, app_count_picks, streak_picks)
+                    rr = dict(cand)
+                    rr.update({
+                        "decision": decision,
+                        "score": score,
+                        "reject_bucket": bucket,
+                        "reasons": reason,
+                        "plain_explanation": plain,
+                        "action": action,
+                        "score_parts": score_parts,
+                    })
+                    rows_picks.append(rr)
+
+                rows_picks = apply_auto_verify_to_rows(rows_picks, rules, update_snapshot=False)
+                rows_picks = apply_alignment_lock_to_rows(rows_picks, rules)
+                picks_df = pd.DataFrame(rows_picks)
+
+                if picks_df.empty:
+                    st.error("No qualifying games in the current window. Fetch again later.")
+                else:
+                    min_odds = float(rules.get("min_decimal_odds", 1.40))
+                    max_odds = float(rules.get("max_decimal_odds", 1.90))
+
+                    qualified = picks_df[
+                        picks_df["decision"].astype(str).str.contains("APPROVED|ELITE", regex=True, na=False)
+                        & picks_df["paper_log_allowed"].fillna(False).astype(bool)
+                        & (picks_df["best_odds"].astype(float) >= min_odds)
+                        & (picks_df["best_odds"].astype(float) <= max_odds)
+                    ].copy()
+
+                    if rules.get("picks_mode_high_conf_only", True):
+                        qualified = qualified[qualified["data_confidence"].astype(str).str.upper() == "HIGH"].copy()
+
+                    qualified = qualified.sort_values(["score", "data_confidence_score", "start_nz"], ascending=[False, False, True]).reset_index(drop=True)
+
+                    p1, p2, p3, p4 = st.columns(4)
+                    p1.metric("Qualifying paper picks", len(qualified))
+                    p2.metric("Odds range", f"{min_odds:.2f}-{max_odds:.2f}")
+                    p3.metric("Post-start grace", f"{int(rules.get('post_start_grace_minutes', 5))}m")
+                    p4.metric("HIGH only", "ON" if rules.get("picks_mode_high_conf_only", True) else "OFF")
+
+                    if qualified.empty:
+                        st.error("No unlocked HIGH-confidence paper picks qualify right now. Good — the shield is blocking weak spots.")
+                        st.caption("Try Fetch again closer to game time, but do not chase.")
+                    else:
+                        st.success("These are the current qualifying PAPER picks. They passed odds range, Auto Verify, and Alignment Lock.")
+                        show_cols = [
+                            "decision", "score", "data_confidence", "data_confidence_score",
+                            "sport", "game", "market_label", "pick", "best_odds", "best_bookmaker",
+                            "market_win_pct", "pinnacle", "pinnacle_gap_pct", "books",
+                            "time_status", "starts_in", "start_nz", "start_et",
+                            "log_lock_status", "log_lock_reason",
+                        ]
+                        st.dataframe(
+                            qualified[show_cols].style.format({
+                                "best_odds": "{:.2f}",
+                                "market_win_pct": "{:.2f}%",
+                                "pinnacle": "{:.2f}",
+                                "pinnacle_gap_pct": "{:.2f}%",
+                            }),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+                        st.markdown("### Quick cards")
+                        max_cards = min(len(qualified), 10)
+                        for i in range(max_cards):
+                            row = qualified.iloc[i].to_dict()
+                            with st.container(border=True):
+                                st.markdown(f"### {i+1}. {row.get('pick', '')} @ {safe_float(row.get('best_odds', 0), 0):.2f}")
+                                st.markdown(f"**Game:** {row.get('game', '')}")
+                                st.markdown(f"**Sport/Market:** {row.get('sport', '')} • {row.get('market_label', '')}")
+                                st.markdown(f"**Book:** {row.get('best_bookmaker', '')}")
+                                st.markdown(f"**Auto Verify:** {row.get('data_confidence', '')} ({row.get('data_confidence_score', '')}/100)")
+                                st.markdown(f"**Time:** {row.get('time_status', '')} • starts in {row.get('starts_in', '')}")
+                                st.caption(f"Lock: {row.get('log_lock_status', '')} — {row.get('log_lock_reason', '')}")
+
+                        st.warning("Daily discipline: showing many qualifying paper picks does not mean you should bet them. For proof-building, log paper only and keep your daily limit.")
+
+    with tabs[2]:
         st.subheader("📱 Mobile Cards")
         st.write("Clean iPhone view with no-edge GOAT Score, plain-English explanations, and clear action labels.")
         events_cards = st.session_state.get("events_v36", [])
@@ -1924,7 +2073,7 @@ def main():
             st.info("Run Fetch NZ bettor board first, then come here.")
         else:
             pinnacle_ref_cards = st.session_state.get("pinnacle_ref_v38", {}) if rules.get("show_pinnacle_reference") else {}
-            candidates_cards = build_candidates(events_cards, last_markets_cards, int(rules["min_minutes_before_start"]), pinnacle_ref_cards)
+            candidates_cards = build_candidates(events_cards, last_markets_cards, int(rules["min_minutes_before_start"]), pinnacle_ref_cards, int(rules.get("post_start_grace_minutes", 5)))
             rows_cards = []
             app_count_cards = approved_today_count(log_df)
             streak_cards = loss_streak_count(log_df)
@@ -1950,7 +2099,7 @@ def main():
                     for n, (_, card_row) in enumerate(picked_cards.iterrows(), start=1):
                         render_candidate_card(card_row.to_dict(), n)
 
-    with tabs[2]:
+    with tabs[3]:
         st.subheader("🛡️ Auto Verify + Data Confidence")
         st.info("This is the automatic source-quality check. It does not use Sports Alerts, Sports Chat Place, or Picks & Parlays as required inputs.")
 
@@ -1960,7 +2109,7 @@ def main():
             st.info("Run Fetch NZ bettor board first, then come here.")
         else:
             pinnacle_ref_verify = st.session_state.get("pinnacle_ref_v38", {}) if rules.get("show_pinnacle_reference") else {}
-            candidates_verify = build_candidates(events_verify, last_markets_verify, int(rules["min_minutes_before_start"]), pinnacle_ref_verify)
+            candidates_verify = build_candidates(events_verify, last_markets_verify, int(rules["min_minutes_before_start"]), pinnacle_ref_verify, int(rules.get("post_start_grace_minutes", 5)))
 
             rows_verify = []
             app_count_verify = approved_today_count(log_df)
@@ -2022,7 +2171,7 @@ def main():
 
                 st.caption("Tip: press Fetch again after 30–60 seconds. Auto Verify will compare line movement since the previous fetch.")
 
-    with tabs[3]:
+    with tabs[4]:
         st.subheader("🔒 Alignment Lock")
         st.info("This is the final paper-log gate. A pick must be approved/elite AND unlocked by HIGH Auto Verify or FULL GOAT Alignment.")
 
@@ -2032,7 +2181,7 @@ def main():
             st.info("Run Fetch NZ bettor board first, then come here.")
         else:
             pinnacle_ref_lock = st.session_state.get("pinnacle_ref_v38", {}) if rules.get("show_pinnacle_reference") else {}
-            candidates_lock = build_candidates(events_lock, last_markets_lock, int(rules["min_minutes_before_start"]), pinnacle_ref_lock)
+            candidates_lock = build_candidates(events_lock, last_markets_lock, int(rules["min_minutes_before_start"]), pinnacle_ref_lock, int(rules.get("post_start_grace_minutes", 5)))
 
             rows_lock = []
             app_count_lock = approved_today_count(log_df)
@@ -2083,7 +2232,7 @@ def main():
 
                     st.caption("Rule: source conflict always blocks. HIGH Auto Verify unlocks. FULL GOAT Alignment unlocks. Partial alignment is watchlist only unless you enable partial watchlist logs in settings.")
 
-    with tabs[4]:
+    with tabs[5]:
         st.subheader("🧠 3-Source Alignment")
         st.info("Use this exactly like your manual system: Sports Alerts first, then Sports Chat Place, then Picks & Parlays. This does not scrape public-pick sites and does not make them the main decision maker.")
 
@@ -2093,7 +2242,7 @@ def main():
             st.info("Run Fetch NZ bettor board first, then come here.")
         else:
             pinnacle_ref_proof = st.session_state.get("pinnacle_ref_v38", {}) if rules.get("show_pinnacle_reference") else {}
-            candidates_proof = build_candidates(events_proof, last_markets_proof, int(rules["min_minutes_before_start"]), pinnacle_ref_proof)
+            candidates_proof = build_candidates(events_proof, last_markets_proof, int(rules["min_minutes_before_start"]), pinnacle_ref_proof, int(rules.get("post_start_grace_minutes", 5)))
 
             rows_proof = []
             app_count_proof = approved_today_count(log_df)
@@ -2274,12 +2423,12 @@ def main():
                 if public_heavy:
                     st.warning("Public-heavy risk marked. Treat this as a red flag. Do not turn this into a real bet.")
 
-    with tabs[5]:
+    with tabs[6]:
         st.subheader("🟢 Best Price Board")
         st.write("Use the NZ Bettor Board first. It includes all best-price board columns plus NZ/US time conversion.")
         st.caption("v3.3 keeps this tab as a simple explanation so the phone UI stays cleaner.")
 
-    with tabs[6]:
+    with tabs[7]:
         st.subheader("📒 Paper Log")
         df = load_log()
         if df.empty:
@@ -2288,7 +2437,7 @@ def main():
             st.dataframe(df, use_container_width=True)
             st.download_button("Download CSV", df.to_csv(index=False).encode("utf-8"), "goat_shield_paper_log.csv", "text/csv")
 
-    with tabs[7]:
+    with tabs[8]:
         st.subheader("✅ Results")
         df = load_log()
         if df.empty or "result" not in df.columns:
@@ -2314,7 +2463,7 @@ def main():
                     st.success("Saved.")
                     st.rerun()
 
-    with tabs[8]:
+    with tabs[9]:
         st.subheader("📊 Dashboard")
         df = load_log()
         if df.empty:
@@ -2340,7 +2489,7 @@ def main():
                 st.subheader("Performance by market")
                 st.dataframe(df.groupby("market", dropna=False).size().reset_index(name="paper_picks"), use_container_width=True)
 
-    with tabs[9]:
+    with tabs[10]:
         st.subheader("🛡️ Backup")
         df = load_log()
         if not df.empty:
@@ -2356,11 +2505,11 @@ def main():
             except Exception as e:
                 st.error(f"Restore failed: {e}")
 
-    with tabs[10]:
+    with tabs[11]:
         st.subheader("ℹ️ Health Check / About")
         st.write("This page tells you whether the app is running correctly, what each command does, and what to check before trusting any paper pick.")
 
-        app_version = "GOAT Shield Live v4.3 HEALTH CHECK"
+        app_version = "GOAT Shield Live v4.4 PICKS MODE"
         events_health = st.session_state.get("events_v36", [])
         markets_health = st.session_state.get("markets_v36", markets)
         metas_health = st.session_state.get("metas_v36", [])
@@ -2378,7 +2527,7 @@ def main():
         if events_health:
             try:
                 pinnacle_ref_h = pinnacle_ref_health if rules.get("show_pinnacle_reference") else {}
-                candidates_h = build_candidates(events_health, markets_health, int(rules["min_minutes_before_start"]), pinnacle_ref_h)
+                candidates_h = build_candidates(events_health, markets_health, int(rules["min_minutes_before_start"]), pinnacle_ref_h, int(rules.get("post_start_grace_minutes", 5)))
 
                 app_count_h = approved_today_count(log_health)
                 streak_h = loss_streak_count(log_health)
@@ -2467,6 +2616,7 @@ def main():
         command_rows = [
             {"Command / Tab": "🇳🇿 NZ Bettor Board", "Meaning": "Main scan. Pulls games, odds, Pinnacle reference, Auto Verify, and Alignment Lock."},
             {"Command / Tab": "Fetch NZ bettor board", "Meaning": "Runs the scan. Press this first, then again after 30–60 seconds for line-movement comparison."},
+            {"Command / Tab": "🎯 Picks", "Meaning": "Shows only qualifying unlocked paper picks in your 1.40-1.90 odds range, until start or up to 5 minutes after start."},
             {"Command / Tab": "📱 Mobile Cards", "Meaning": "Best iPhone view. Shows pick, odds, Pinnacle, Auto Verify, and Alignment Lock reason."},
             {"Command / Tab": "🛡️ Auto Verify", "Meaning": "Shows data confidence, data age, market win %, Pinnacle gap, and line stability."},
             {"Command / Tab": "🔒 Alignment Lock", "Meaning": "Final gate. Shows which approved/elite picks are unlocked or blocked for paper-log."},
@@ -2482,12 +2632,12 @@ def main():
 
         st.markdown("### Daily safe-use checklist")
         checklist = pd.DataFrame([
-            {"Step": 1, "Check": "Confirm version says v4.3 HEALTH CHECK", "Why": "Avoid running old broken files."},
+            {"Step": 1, "Check": "Confirm version says v4.4 PICKS MODE", "Why": "Avoid running old broken files."},
             {"Step": 2, "Check": "Press Fetch NZ bettor board", "Why": "Loads latest games and odds."},
             {"Step": 3, "Check": "Wait 30–60 seconds and Fetch again", "Why": "Lets Auto Verify compare line movement."},
             {"Step": 4, "Check": "Pinnacle matches are not always zero", "Why": "Confirms sharp-reference coverage when available."},
-            {"Step": 5, "Check": "Open Auto Verify", "Why": "Only trust HIGH data confidence."},
-            {"Step": 6, "Check": "Open Alignment Lock", "Why": "Only paper-log unlocked picks."},
+            {"Step": 5, "Check": "Open Picks, Auto Verify, and Alignment Lock", "Why": "Only use qualifying HIGH-confidence paper picks."},
+            {"Step": 6, "Check": "Open Alignment Lock", "Why": "Only paper-log unlocked picks; hide games after +5 minutes."},
             {"Step": 7, "Check": "Log paper pick only", "Why": "Build 300-pick proof before real-money thinking."},
         ])
         st.dataframe(checklist, use_container_width=True, hide_index=True)
@@ -2510,7 +2660,7 @@ def main():
 
 
     st.divider()
-    st.caption("GOAT Shield Live v4.3 HEALTH CHECK is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v4.4 PICKS MODE is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":
