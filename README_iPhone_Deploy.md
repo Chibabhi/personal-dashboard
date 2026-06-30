@@ -1,4 +1,4 @@
-# iPhone install guide — v4.4.4 Dynamic Fix
+# iPhone install guide — v4.4.5 Loose Books
 
 Unzip first. Do not upload only the ZIP to GitHub.
 
@@ -15,4 +15,16 @@ Then:
 3. If old version stays, clear cache/reboot.
 
 Success title:
-GOAT Shield Live v4.4.4 DYNAMIC FIX
+GOAT Shield Live v4.4.5 LOOSE BOOKS
+
+Best default settings:
+- Dynamic bookmaker threshold by sport: ON
+- Major sports required books: 8
+- WNBA/MLS required books: 6
+- College required books: 5
+- Other sports required books: 4
+- Require sharp/core support: ON
+- Minimum sharp/core sources: 1
+- Odds range: 1.40-1.90
+- Auto Verify: ON
+- Alignment Lock: ON

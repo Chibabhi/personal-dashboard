@@ -59,10 +59,10 @@ DEFAULT_RULES = {
     "sharp_support_score_bonus": True,
     "retail_only_warning": True,
     "dynamic_book_thresholds": True,
-    "major_sport_books": 10,
-    "mid_sport_books": 8,
-    "college_sport_books": 6,
-    "other_sport_books": 5,
+    "major_sport_books": 8,
+    "mid_sport_books": 6,
+    "college_sport_books": 5,
+    "other_sport_books": 4,
 }
 
 FALLBACK_SPORTS = {
@@ -136,21 +136,21 @@ def required_books_for_candidate(c: Dict[str, Any], rules: Dict[str, Any]) -> Tu
     sport_title = str(c.get("sport", c.get("sport_title", "")) or "").lower()
 
     if sport_key in MAJOR_BOOK_SPORTS:
-        return int(rules.get("major_sport_books", 10)), "Major US sport"
+        return int(rules.get("major_sport_books", 8)), "Major US sport"
     if sport_key in MID_BOOK_SPORTS:
-        return int(rules.get("mid_sport_books", 8)), "WNBA/MLS"
+        return int(rules.get("mid_sport_books", 6)), "WNBA/MLS"
     if sport_key in COLLEGE_BOOK_SPORTS:
-        return int(rules.get("college_sport_books", 6)), "College sport"
+        return int(rules.get("college_sport_books", 5)), "College sport"
 
     # Fallback by title text in case an API sport key changes slightly.
     if any(x in sport_title for x in ["mlb", "nba", "nfl", "nhl"]):
-        return int(rules.get("major_sport_books", 10)), "Major US sport"
+        return int(rules.get("major_sport_books", 8)), "Major US sport"
     if any(x in sport_title for x in ["wnba", "mls"]):
-        return int(rules.get("mid_sport_books", 8)), "WNBA/MLS"
+        return int(rules.get("mid_sport_books", 6)), "WNBA/MLS"
     if any(x in sport_title for x in ["college", "ncaa", "ncaab", "ncaaf", "ncaawb"]):
-        return int(rules.get("college_sport_books", 6)), "College sport"
+        return int(rules.get("college_sport_books", 5)), "College sport"
 
-    return int(rules.get("other_sport_books", 5)), "Other/low-coverage sport"
+    return int(rules.get("other_sport_books", 4)), "Other/low-coverage sport"
 
 
 def resolved_required_books(c: Dict[str, Any], rules: Dict[str, Any]) -> Tuple[int, str]:
@@ -176,7 +176,7 @@ def resolved_required_books(c: Dict[str, Any], rules: Dict[str, Any]) -> Tuple[i
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v4.4.4 DYNAMIC FIX",
+    page_title="GOAT Shield Live v4.4.5 LOOSE BOOKS",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -1663,8 +1663,8 @@ def render_public_proof_badge(row: Dict[str, Any]) -> None:
 
 
 def main():
-    st.title("🐐 GOAT Shield Live v4.4.4 DYNAMIC FIX")
-    st.caption("Dynamic Bookmaker Thresholds + TypeError fix. Major sports need 10 books, WNBA/MLS 8, college 6, plus sharp/core support. Paper-only.")
+    st.title("🐐 GOAT Shield Live v4.4.5 LOOSE BOOKS")
+    st.caption("Looser dynamic bookmaker thresholds. Major sports need 8 books, WNBA/MLS 6, college 5, other 4, plus sharp/core support. Paper-only.")
 
     api_key_default = secret("ODDS_API_KEY", "")
 
@@ -1797,12 +1797,12 @@ def main():
         )
 
         if rules.get("dynamic_book_thresholds", True):
-            st.caption("Dynamic defaults: MLB/NBA/NFL/NHL = 10 books, WNBA/MLS = 8, college = 6, other = 5.")
-            rules["major_sport_books"] = st.number_input("Major sports required books", 5, 30, int(rules.get("major_sport_books", 10)), 1)
-            rules["mid_sport_books"] = st.number_input("WNBA/MLS required books", 5, 30, int(rules.get("mid_sport_books", 8)), 1)
-            rules["college_sport_books"] = st.number_input("College required books", 4, 30, int(rules.get("college_sport_books", 6)), 1)
-            rules["other_sport_books"] = st.number_input("Other sports required books", 3, 30, int(rules.get("other_sport_books", 5)), 1)
-            rules["min_books_compared"] = int(rules.get("major_sport_books", 10))
+            st.caption("Looser dynamic defaults: MLB/NBA/NFL/NHL = 8 books, WNBA/MLS = 6, college = 5, other = 4.")
+            rules["major_sport_books"] = st.number_input("Major sports required books", 5, 30, int(rules.get("major_sport_books", 8)), 1)
+            rules["mid_sport_books"] = st.number_input("WNBA/MLS required books", 5, 30, int(rules.get("mid_sport_books", 6)), 1)
+            rules["college_sport_books"] = st.number_input("College required books", 4, 30, int(rules.get("college_sport_books", 5)), 1)
+            rules["other_sport_books"] = st.number_input("Other sports required books", 3, 30, int(rules.get("other_sport_books", 4)), 1)
+            rules["min_books_compared"] = int(rules.get("major_sport_books", 8))
         else:
             rules["min_books_compared"] = st.number_input("Minimum bookmakers compared", 1, 30, int(rules["min_books_compared"]), 1)
 
@@ -2165,7 +2165,7 @@ def main():
     with tabs[1]:
         st.subheader("🎯 Picks — qualifying paper picks only")
         st.warning("Paper-only. This tab is not a real-money betting screen. It only shows candidates that pass your current rules and Alignment Lock.")
-        st.caption("v4.4.2 rule: a pick must have at least 10 bookmakers compared and sharp/core support by default. The app compares all available returned bookmakers, not only 10.")
+        st.caption("v4.4.5 rule: looser dynamic bookmaker thresholds are ON. Major sports need 8 books, WNBA/MLS 6, college 5, other 4, plus sharp/core support.")
 
         events_picks = st.session_state.get("events_v36", [])
         last_markets_picks = st.session_state.get("markets_v36", markets)
@@ -2717,7 +2717,7 @@ def main():
         st.subheader("ℹ️ Health Check / About")
         st.write("This page tells you whether the app is running correctly, what each command does, and what to check before trusting any paper pick.")
 
-        app_version = "GOAT Shield Live v4.4.4 DYNAMIC FIX"
+        app_version = "GOAT Shield Live v4.4.5 LOOSE BOOKS"
         events_health = st.session_state.get("events_v36", [])
         markets_health = st.session_state.get("markets_v36", markets)
         metas_health = st.session_state.get("metas_v36", [])
@@ -2853,7 +2853,7 @@ def main():
 
         st.markdown("### Daily safe-use checklist")
         checklist = pd.DataFrame([
-            {"Step": 1, "Check": "Confirm version says v4.4.4 DYNAMIC FIX", "Why": "Avoid running old broken files."},
+            {"Step": 1, "Check": "Confirm version says v4.4.5 LOOSE BOOKS", "Why": "Avoid running old broken files."},
             {"Step": 2, "Check": "Press Fetch NZ bettor board", "Why": "Loads latest games and odds."},
             {"Step": 3, "Check": "Wait 30–60 seconds and Fetch again", "Why": "Lets Auto Verify compare line movement."},
             {"Step": 4, "Check": "Pinnacle/sharp support and dynamic bookmaker thresholds look healthy", "Why": "Confirms sharp-reference and sport-specific bookmaker coverage when available."},
@@ -2874,7 +2874,7 @@ def main():
         st.write("1. The Odds API market odds and bookmaker data")
         st.write("2. Pinnacle reference from The Odds API")
         st.write("3. Sharp/core support detection: Pinnacle reference plus returned books/exchanges such as Circa, BookMaker/CRIS, Betfair, Matchbook, or Smarkets when available")
-        st.write("4. Dynamic bookmaker threshold: MLB/NBA/NFL/NHL need 10, WNBA/MLS need 8, college need 6, other sports need 5 by default")
+        st.write("4. Dynamic bookmaker threshold: MLB/NBA/NFL/NHL need 8, WNBA/MLS need 6, college need 5, other sports need 4 by default")
         st.write("5. Internal calculations: implied probability, home favourite, time safety, line movement, data confidence")
         st.write("Optional/manual sources only:")
         st.write("Sports Alerts, Sports Chat Place, Picks & Parlays")
@@ -2883,7 +2883,7 @@ def main():
 
 
     st.divider()
-    st.caption("GOAT Shield Live v4.4.4 DYNAMIC FIX is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v4.4.5 LOOSE BOOKS is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":
