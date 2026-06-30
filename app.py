@@ -31,7 +31,7 @@ ET_TZ_NAME = "America/New_York"
 DEFAULT_RULES = {
     "min_decimal_odds": 1.40,
     "max_decimal_odds": 1.90,
-    "min_books_compared": 5,
+    "min_books_compared": 10,
     "max_daily": 3,
     "lock_losses": 3,
     "min_minutes_before_start": 0,
@@ -54,6 +54,10 @@ DEFAULT_RULES = {
     "post_start_grace_minutes": 5,
     "hide_after_post_start_grace": True,
     "picks_mode_high_conf_only": True,
+    "require_sharp_support": True,
+    "min_sharp_books": 1,
+    "sharp_support_score_bonus": True,
+    "retail_only_warning": True,
 }
 
 FALLBACK_SPORTS = {
@@ -84,12 +88,27 @@ PINNACLE_HINTS = ("pinnacle",)
 NZ_BOOK_HINTS = ("tab", "tab nz", "betcha", "entain")
 BET365_HINTS = ("bet365",)
 
+# Sharp/core reference books or exchanges when returned by your selected Odds API plan/region.
+# The app detects these only if they appear in the API response or the separate Pinnacle reference pull.
+SHARP_BOOK_HINTS = (
+    "pinnacle",
+    "circa",
+    "bookmaker",
+    "bookmaker.eu",
+    "cris",
+    "betcris",
+    "betfair",
+    "betfair exchange",
+    "matchbook",
+    "smarkets",
+)
+
 
 # =========================================================
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v4.4 PICKS MODE",
+    page_title="GOAT Shield Live v4.4.2 SHARP BOOKS",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -142,6 +161,37 @@ def safe_point(x: Any) -> Optional[float]:
 def has_hint(text: str, hints: Tuple[str, ...]) -> bool:
     t = str(text or "").lower()
     return any(h in t for h in hints)
+
+
+def canonical_book_name(row: Dict[str, Any]) -> str:
+    key = str(row.get("book_key", "") or "").strip()
+    title = str(row.get("book", "") or "").strip()
+    return key.lower() if key else title.lower()
+
+
+def sharp_rows_from_group(group: List[Dict[str, Any]], pinnacle_available: bool = False) -> List[Dict[str, Any]]:
+    sharp = []
+    seen = set()
+
+    for x in group:
+        if has_hint(x.get("book_key", ""), SHARP_BOOK_HINTS) or has_hint(x.get("book", ""), SHARP_BOOK_HINTS):
+            k = canonical_book_name(x)
+            if k and k not in seen:
+                seen.add(k)
+                sharp.append(x)
+
+    # Pinnacle can be pulled separately as a reference source, so count it as sharp support even
+    # if it was not part of the main region/bookmaker response.
+    if pinnacle_available and "pinnacle_reference" not in seen:
+        sharp.append({"book": "Pinnacle reference", "book_key": "pinnacle_reference"})
+
+    return sharp
+
+
+def sharp_status_text(sharp_count: int, sharp_books: str) -> str:
+    if sharp_count <= 0:
+        return "RETAIL ONLY — no sharp/core support detected"
+    return f"SHARP SUPPORT — {sharp_count} core source(s): {sharp_books}"
 
 
 def market_label(m: str) -> str:
@@ -559,6 +609,21 @@ def build_candidates(events: List[Dict[str, Any]], selected_markets: List[str], 
             b365_best = max(b365, key=lambda x: x["price"]) if b365 else None
             pinnacle_gap_pct, pinnacle_status = pinnacle_compare_status(best["price"], pin_best["price"] if pin_best else None)
 
+            unique_books = sorted({canonical_book_name(x) for x in group if canonical_book_name(x)})
+            sharp_rows = sharp_rows_from_group(group, pinnacle_available=bool(pin_best))
+            sharp_book_names = []
+            seen_sharp_names = set()
+            for x in sharp_rows:
+                nm = str(x.get("book", x.get("book_key", "")) or "").strip()
+                key_nm = nm.lower()
+                if nm and key_nm not in seen_sharp_names:
+                    seen_sharp_names.add(key_nm)
+                    sharp_book_names.append(nm)
+            sharp_core_count = len(sharp_book_names)
+            sharp_books_text = ", ".join(sharp_book_names) if sharp_book_names else "None"
+            sharp_support = sharp_core_count >= 1
+            retail_books_count = max(0, len(unique_books) - len([b for b in unique_books if has_hint(b, SHARP_BOOK_HINTS)]))
+
             is_team = market in ("h2h", "spreads") and outcome in (home, away)
             is_home = bool(is_team and outcome == home)
             if market == "h2h":
@@ -604,6 +669,11 @@ def build_candidates(events: List[Dict[str, Any]], selected_markets: List[str], 
                 "pinnacle_gap_pct": pinnacle_gap_pct,
                 "pinnacle_status": pinnacle_status,
                 "pinnacle_available": bool(pin_best),
+                "sharp_support": bool(sharp_support),
+                "sharp_core_count": int(sharp_core_count),
+                "sharp_books": sharp_books_text,
+                "sharp_status": sharp_status_text(sharp_core_count, sharp_books_text),
+                "retail_books_count": int(retail_books_count),
                 "tab_betcha": round(nz_best["price"], 3) if nz_best else None,
                 "bet365": round(b365_best["price"], 3) if b365_best else None,
                 "consensus_prob": round(consensus_prob, 5),
@@ -719,6 +789,8 @@ def plain_explanation(decision: str, c: Dict[str, Any], reason: str, rules: Dict
         return "Passed no-edge GOAT checks: NZD decimal odds range, bookmaker support, NZ/US time safety, and discipline rules." + pin_line + " Paper log only."
     if "LOW BOOK COVERAGE" in decision:
         return f"Only {c.get('books', 0)} bookmaker prices were compared. Your minimum is {rules['min_books_compared']}. Not enough market coverage."
+    if "RETAIL ONLY" in decision:
+        return f"Only retail/soft-book support was detected. Sharp status: {c.get('sharp_status', 'unknown')}. Keep as watchlist only."
     if "ODDS RANGE" in decision:
         return f"Best decimal odds are {best:.2f}, outside your NZD staking range of {min_odds:.2f}-{max_odds:.2f}."
     if "TIME WINDOW" in decision:
@@ -781,6 +853,8 @@ def decide(c: Dict[str, Any], rules: Dict[str, Any], flags: Dict[str, bool], app
             decision, bucket, reason = "REJECTED — ODDS RANGE", "Odds range", f"Best decimal odds {c['best_odds']:.2f} outside {min_odds:.2f}-{max_odds:.2f}"
         elif int(c.get("books", 0)) < min_books:
             decision, bucket, reason = "WATCHLIST — LOW BOOK COVERAGE", "Low book coverage", f"Only {c.get('books', 0)} books compared; minimum is {min_books}"
+        elif rules.get("require_sharp_support", True) and int(c.get("sharp_core_count", 0)) < int(rules.get("min_sharp_books", 1)):
+            decision, bucket, reason = "WATCHLIST — RETAIL ONLY", "No sharp support", f"No sharp/core bookmaker support detected. Need at least {int(rules.get('min_sharp_books', 1))} sharp/core source."
         elif rules["apply_home_rules_to_team_markets"] and c["market"] in ("h2h", "spreads") and rules["require_home_pick"] and not c["home_pick"]:
             decision, bucket, reason = "REJECTED — NOT HOME PICK", "Not home pick", "Pick is not home team"
         elif rules["apply_home_rules_to_team_markets"] and c["market"] in ("h2h", "spreads") and rules["require_home_favourite"] and not c["home_fav"]:
@@ -861,6 +935,9 @@ def render_candidate_card(row: dict, idx: int):
             st.markdown(f"**Pinnacle reference:** {safe_float(pin, 0):.2f} | Gap: {safe_float(pin_gap, 0):+.2f}% | {pin_status}")
         else:
             st.markdown("**Pinnacle reference:** not available")
+
+        st.markdown(f"**Sharp/Core support:** {row.get('sharp_status', 'Unknown')}")
+        st.caption(f"Sharp books: {row.get('sharp_books', 'None')} | Retail books counted: {row.get('retail_books_count', 0)}")
 
         conf = str(row.get("data_confidence", "UNKNOWN"))
         conf_score = int(safe_float(row.get("data_confidence_score", 0), 0))
@@ -987,6 +1064,18 @@ def confidence_parts(c: Dict[str, Any], rules: Dict[str, Any], previous: Optiona
     else:
         score -= 15
         warnings.append("Pinnacle reference missing")
+
+    min_sharp = int(rules.get("min_sharp_books", 1))
+    sharp_count = int(c.get("sharp_core_count", 0))
+    if sharp_count >= min_sharp:
+        passed.append(str(c.get("sharp_status", f"Sharp support: {sharp_count}")))
+    else:
+        if rules.get("require_sharp_support", True):
+            score -= 22
+            warnings.append(f"No sharp/core support detected; minimum is {min_sharp}")
+        elif rules.get("retail_only_warning", True):
+            score -= 8
+            warnings.append("Retail-only support warning")
 
     age = c.get("oldest_book_update_age_sec")
     if age is None or str(age) == "nan" or age == "":
@@ -1503,8 +1592,8 @@ def render_public_proof_badge(row: Dict[str, Any]) -> None:
 
 
 def main():
-    st.title("🐐 GOAT Shield Live v4.4 PICKS MODE")
-    st.caption("Picks Mode + Latest Data Guard. Shows only qualifying paper picks in 1.40-1.90 odds range, up to 5 minutes after start. Paper-only.")
+    st.title("🐐 GOAT Shield Live v4.4.2 SHARP BOOKS")
+    st.caption("Picks Mode + Sharp Bookmaker Priority. Requires 10+ books and sharp/core support where available. Odds 1.40-1.90. Paper-only.")
 
     api_key_default = secret("ODDS_API_KEY", "")
 
@@ -1624,7 +1713,23 @@ def main():
         rules.setdefault("picks_mode_high_conf_only", True)
         rules["min_decimal_odds"] = st.number_input("Min NZD decimal odds", 1.01, 10.0, float(rules["min_decimal_odds"]), 0.01)
         rules["max_decimal_odds"] = st.number_input("Max NZD decimal odds", 1.01, 10.0, float(rules["max_decimal_odds"]), 0.01)
-        rules["min_books_compared"] = st.number_input("Minimum bookmakers compared", 1, 20, int(rules["min_books_compared"]), 1)
+        rules["min_books_compared"] = st.number_input("Minimum bookmakers compared", 1, 30, int(rules["min_books_compared"]), 1)
+        rules["require_sharp_support"] = st.checkbox(
+            "Require sharp/core bookmaker support",
+            bool(rules.get("require_sharp_support", True)),
+            help="Sharp/core support means Pinnacle reference or detected books/exchanges like Circa, BookMaker/CRIS, Betfair/Matchbook/Smarkets when available.",
+        )
+        rules["min_sharp_books"] = st.number_input(
+            "Minimum sharp/core sources",
+            0,
+            5,
+            int(rules.get("min_sharp_books", 1)),
+            1,
+        )
+        rules["retail_only_warning"] = st.checkbox(
+            "Warn/penalise retail-only support",
+            bool(rules.get("retail_only_warning", True)),
+        )
         rules["max_daily"] = st.number_input("Max approved paper picks per NZ day", 1, 20, int(rules["max_daily"]), 1)
         rules["lock_losses"] = st.number_input("Loss-streak lockout", 1, 20, int(rules["lock_losses"]), 1)
         rules["min_minutes_before_start"] = st.number_input(
@@ -1853,7 +1958,7 @@ def main():
                     "sport", "game", "market_label", "pick",
                     "best_odds", "best_bookmaker", "avg_odds",
                     "market_win_pct", "best_implied_win_pct",
-                    "pinnacle", "pinnacle_gap_pct", "pinnacle_status", "tab_betcha", "bet365",
+                    "pinnacle", "pinnacle_gap_pct", "pinnacle_status", "sharp_status", "sharp_core_count", "sharp_books", "retail_books_count", "tab_betcha", "bet365",
                     "data_confidence", "data_confidence_score", "data_age", "line_stability",
                     "log_lock_status", "log_lock_reason", "alignment_status_saved", "parlay_leg_status_saved",
                     "price_lift_pct", "books", "reasons", "data_confidence_reasons", "score_parts", "all_prices",
@@ -1873,7 +1978,7 @@ def main():
                     st.info("No closest misses.")
                 else:
                     st.dataframe(
-                        missed[["decision", "score", "data_confidence", "data_confidence_score", "plain_explanation", "action", "time_status", "starts_in", "start_nz", "start_et", "market_label", "pick", "best_odds", "best_bookmaker", "pinnacle", "pinnacle_gap_pct", "pinnacle_status", "price_lift_pct", "reasons", "data_confidence_reasons", "all_prices"]].style.format({"best_odds": "{:.2f}", "pinnacle": "{:.2f}", "pinnacle_gap_pct": "{:.2f}%", "price_lift_pct": "{:.2f}%"}),
+                        missed[["decision", "score", "data_confidence", "data_confidence_score", "plain_explanation", "action", "time_status", "starts_in", "start_nz", "start_et", "market_label", "pick", "best_odds", "best_bookmaker", "pinnacle", "pinnacle_gap_pct", "pinnacle_status", "sharp_status", "sharp_books", "price_lift_pct", "reasons", "data_confidence_reasons", "all_prices"]].style.format({"best_odds": "{:.2f}", "pinnacle": "{:.2f}", "pinnacle_gap_pct": "{:.2f}%", "price_lift_pct": "{:.2f}%"}),
                         use_container_width=True,
                         hide_index=True,
                     )
@@ -1891,7 +1996,7 @@ def main():
                     if not locked_rows.empty:
                         st.warning(f"Alignment Lock blocked {len(locked_rows)} approved/elite candidate(s) from paper-log.")
                         st.dataframe(
-                            locked_rows[["decision", "score", "data_confidence", "data_confidence_score", "pick", "best_odds", "log_lock_status", "log_lock_reason", "alignment_status_saved"]].style.format({"best_odds": "{:.2f}"}),
+                            locked_rows[["decision", "score", "data_confidence", "data_confidence_score", "pick", "best_odds", "sharp_status", "sharp_books", "log_lock_status", "log_lock_reason", "alignment_status_saved"]].style.format({"best_odds": "{:.2f}"}),
                             use_container_width=True,
                             hide_index=True,
                         )
@@ -1928,6 +2033,10 @@ def main():
                                 "pinnacle": chosen.get("pinnacle", ""),
                                 "pinnacle_gap_pct": chosen.get("pinnacle_gap_pct", ""),
                                 "pinnacle_status": chosen.get("pinnacle_status", ""),
+                                "sharp_status": chosen.get("sharp_status", ""),
+                                "sharp_core_count": chosen.get("sharp_core_count", ""),
+                                "sharp_books": chosen.get("sharp_books", ""),
+                                "retail_books_count": chosen.get("retail_books_count", ""),
                                 "tab_betcha": chosen.get("tab_betcha", ""),
                                 "bet365": chosen.get("bet365", ""),
                                 "price_lift_pct": chosen.get("price_lift_pct", ""),
@@ -1961,6 +2070,7 @@ def main():
     with tabs[1]:
         st.subheader("🎯 Picks — qualifying paper picks only")
         st.warning("Paper-only. This tab is not a real-money betting screen. It only shows candidates that pass your current rules and Alignment Lock.")
+        st.caption("v4.4.2 rule: a pick must have at least 10 bookmakers compared and sharp/core support by default. The app compares all available returned bookmakers, not only 10.")
 
         events_picks = st.session_state.get("events_v36", [])
         last_markets_picks = st.session_state.get("markets_v36", markets)
@@ -2034,7 +2144,7 @@ def main():
                         show_cols = [
                             "decision", "score", "data_confidence", "data_confidence_score",
                             "sport", "game", "market_label", "pick", "best_odds", "best_bookmaker",
-                            "market_win_pct", "pinnacle", "pinnacle_gap_pct", "books",
+                            "market_win_pct", "pinnacle", "pinnacle_gap_pct", "sharp_status", "sharp_core_count", "sharp_books", "books",
                             "time_status", "starts_in", "start_nz", "start_et",
                             "log_lock_status", "log_lock_reason",
                         ]
@@ -2059,6 +2169,7 @@ def main():
                                 st.markdown(f"**Sport/Market:** {row.get('sport', '')} • {row.get('market_label', '')}")
                                 st.markdown(f"**Book:** {row.get('best_bookmaker', '')}")
                                 st.markdown(f"**Auto Verify:** {row.get('data_confidence', '')} ({row.get('data_confidence_score', '')}/100)")
+                                st.markdown(f"**Sharp/Core:** {row.get('sharp_status', 'Unknown')}")
                                 st.markdown(f"**Time:** {row.get('time_status', '')} • starts in {row.get('starts_in', '')}")
                                 st.caption(f"Lock: {row.get('log_lock_status', '')} — {row.get('log_lock_reason', '')}")
 
@@ -2153,7 +2264,7 @@ def main():
                 show_cols = [
                     "data_confidence", "data_confidence_score", "decision", "score",
                     "sport", "game", "pick", "best_odds", "market_win_pct", "best_implied_win_pct",
-                    "pinnacle", "pinnacle_gap_pct", "books", "data_age", "line_stability",
+                    "pinnacle", "pinnacle_gap_pct", "sharp_status", "sharp_core_count", "sharp_books", "books", "data_age", "line_stability",
                     "log_lock_status", "log_lock_reason",
                     "data_confidence_reasons", "data_confidence_passed",
                 ]
@@ -2222,6 +2333,7 @@ def main():
                         "data_confidence", "data_confidence_score",
                         "alignment_status_saved", "parlay_leg_status_saved",
                         "sport", "game", "pick", "best_odds", "pinnacle", "pinnacle_gap_pct",
+                        "sharp_status", "sharp_core_count", "sharp_books",
                         "log_lock_reason",
                     ]
                     st.dataframe(
@@ -2509,7 +2621,7 @@ def main():
         st.subheader("ℹ️ Health Check / About")
         st.write("This page tells you whether the app is running correctly, what each command does, and what to check before trusting any paper pick.")
 
-        app_version = "GOAT Shield Live v4.4 PICKS MODE"
+        app_version = "GOAT Shield Live v4.4.2 SHARP BOOKS"
         events_health = st.session_state.get("events_v36", [])
         markets_health = st.session_state.get("markets_v36", markets)
         metas_health = st.session_state.get("metas_v36", [])
@@ -2558,6 +2670,8 @@ def main():
         pinnacle_matches = len(pinnacle_ref_health) if isinstance(pinnacle_ref_health, dict) else 0
         conf_counts = auto_verify_summary(health_df) if not health_df.empty else {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
         lock_counts = alignment_lock_summary(health_df) if not health_df.empty else {"UNLOCKED": 0, "LOCKED": 0}
+        sharp_supported_count = int(health_df["sharp_support"].fillna(False).astype(bool).sum()) if not health_df.empty and "sharp_support" in health_df.columns else 0
+        retail_only_count = int(len(health_df) - sharp_supported_count) if not health_df.empty else 0
 
         def status_text(ok: bool) -> str:
             return "✅ OK" if ok else "❌ CHECK"
@@ -2577,6 +2691,11 @@ def main():
         c7.metric("Requests used", requests_used)
         c8.metric("Requests remaining", requests_remaining)
         c9.metric("Pinnacle matches", pinnacle_matches)
+
+        s1, s2, s3 = st.columns(3)
+        s1.metric("Sharp-supported candidates", sharp_supported_count)
+        s2.metric("Retail-only candidates", retail_only_count)
+        s3.metric("Sharp rule", "ON" if rules.get("require_sharp_support", True) else "OFF")
 
         st.markdown("### Data confidence")
         d1, d2, d3, d4, d5 = st.columns(5)
@@ -2598,11 +2717,13 @@ def main():
             verdicts.append(("⚠️ No candidates rebuilt", "Check market/sport selection and API response."))
         if fetch_ok and conf_counts.get("HIGH", 0) == 0:
             verdicts.append(("⚠️ No HIGH confidence picks", "Do not paper-log unless Alignment Lock unlocks through FULL GOAT Alignment."))
+        if fetch_ok and rules.get("require_sharp_support", True) and sharp_supported_count == 0:
+            verdicts.append(("⚠️ No sharp/core support found", "Do not paper-log retail-only candidates. Check sport/region coverage or wait for better market depth."))
         if fetch_ok and lock_counts.get("UNLOCKED", 0) == 0:
             verdicts.append(("ℹ️ No paper-log unlocked picks", "This is not always bad. It means the shield is blocking weak candidates."))
 
         if not verdicts:
-            st.success("✅ App looks healthy. Fetch worked, data loaded, confidence checks ran, and Alignment Lock is active.")
+            st.success("✅ App looks healthy. Fetch worked, data loaded, confidence checks ran, bookmaker coverage checked, and Alignment Lock is active.")
         else:
             for title, detail in verdicts:
                 if title.startswith("❌"):
@@ -2616,9 +2737,9 @@ def main():
         command_rows = [
             {"Command / Tab": "🇳🇿 NZ Bettor Board", "Meaning": "Main scan. Pulls games, odds, Pinnacle reference, Auto Verify, and Alignment Lock."},
             {"Command / Tab": "Fetch NZ bettor board", "Meaning": "Runs the scan. Press this first, then again after 30–60 seconds for line-movement comparison."},
-            {"Command / Tab": "🎯 Picks", "Meaning": "Shows only qualifying unlocked paper picks in your 1.40-1.90 odds range, until start or up to 5 minutes after start."},
+            {"Command / Tab": "🎯 Picks", "Meaning": "Shows only qualifying unlocked paper picks in your 1.40-1.90 odds range, with 10+ books and sharp/core support when available."},
             {"Command / Tab": "📱 Mobile Cards", "Meaning": "Best iPhone view. Shows pick, odds, Pinnacle, Auto Verify, and Alignment Lock reason."},
-            {"Command / Tab": "🛡️ Auto Verify", "Meaning": "Shows data confidence, data age, market win %, Pinnacle gap, and line stability."},
+            {"Command / Tab": "🛡️ Auto Verify", "Meaning": "Shows data confidence, data age, market win %, Pinnacle gap, sharp/core support, and line stability."},
             {"Command / Tab": "🔒 Alignment Lock", "Meaning": "Final gate. Shows which approved/elite picks are unlocked or blocked for paper-log."},
             {"Command / Tab": "🧠 3-Source Alignment", "Meaning": "Optional manual proof for Sports Alerts, Sports Chat Place, and Picks & Parlays."},
             {"Command / Tab": "🟢 Best Price Board", "Meaning": "Compares bookmaker prices so you can see best available odds."},
@@ -2652,7 +2773,8 @@ def main():
         st.write("Trusted automatic sources:")
         st.write("1. The Odds API market odds and bookmaker data")
         st.write("2. Pinnacle reference from The Odds API")
-        st.write("3. Internal calculations: implied probability, home favourite, time safety, line movement, data confidence")
+        st.write("3. Sharp/core support detection: Pinnacle reference plus returned books/exchanges such as Circa, BookMaker/CRIS, Betfair, Matchbook, or Smarkets when available")
+        st.write("4. Internal calculations: implied probability, home favourite, time safety, line movement, data confidence")
         st.write("Optional/manual sources only:")
         st.write("Sports Alerts, Sports Chat Place, Picks & Parlays")
 
@@ -2660,7 +2782,7 @@ def main():
 
 
     st.divider()
-    st.caption("GOAT Shield Live v4.4 PICKS MODE is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v4.4.2 SHARP BOOKS is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":

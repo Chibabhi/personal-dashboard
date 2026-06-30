@@ -1,4 +1,4 @@
-# iPhone install guide — v4.4 Picks Mode
+# iPhone install guide — v4.4.2 Sharp Books
 
 Unzip first. Do not upload only the ZIP to GitHub.
 
@@ -16,12 +16,11 @@ Then:
 3. If old version stays, clear cache/reboot.
 
 Success title:
-GOAT Shield Live v4.4 PICKS MODE
+GOAT Shield Live v4.4.2 SHARP BOOKS
 
 How to use:
 1. Fetch NZ Bettor Board.
 2. Wait 30–60 seconds.
 3. Fetch again.
 4. Open 🎯 Picks.
-5. Press 🎯 Picks — show qualifying paper picks.
-6. Use paper-log only.
+5. Only paper-log unlocked HIGH-confidence picks with 10+ books and sharp/core support.

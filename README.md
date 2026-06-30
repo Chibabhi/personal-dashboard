@@ -1,22 +1,33 @@
-# GOAT Shield Live v4.4 — Picks Mode
+# GOAT Shield Live v4.4.2 — Sharp Bookmaker Priority
 
-This version adds a dedicated Picks tab and updates the default odds/time rules.
+This version adds a sharp/core bookmaker support layer.
 
-## v4.4 upgrade
+## v4.4.2 upgrade
 
-- Default decimal odds range: 1.40 to 1.90
-- Default pre-start lock: 0 minutes
-- Show qualifying paper picks until game start, or up to 5 minutes after start
-- Hide games after the +5 minute post-start grace window
-- New 🎯 Picks tab
-- Picks tab shows only candidates that qualify through:
-  - Approved/Elite decision
-  - Alignment Lock unlocked
-  - Auto Verify confidence HIGH by default
-  - Odds range 1.40-1.90
-  - Current time window rules
-- Fetch window is adjusted backward by the grace period so very recently started games can still be checked when the API provides them
+- Keeps minimum bookmakers compared default: 10
+- Adds sharp/core support detection
+- Counts Pinnacle reference as sharp support when available
+- Detects returned books/exchanges such as:
+  - Pinnacle
+  - Circa
+  - BookMaker / CRIS
+  - Betfair / Betfair Exchange
+  - Matchbook
+  - Smarkets
+- Adds fields:
+  - sharp_support
+  - sharp_core_count
+  - sharp_books
+  - sharp_status
+  - retail_books_count
+- Auto Verify penalises retail-only support
+- Decision engine moves retail-only picks to WATCHLIST by default
+- Picks tab shows sharp/core status
+- Health Check shows sharp-supported vs retail-only candidates
 
-## Safety
+## Important
 
-Paper-only. No sportsbook login. No auto-betting. No guarantee of winning.
+This does not guarantee the “best books on Earth” are available.
+It detects and uses sharp/core books only when The Odds API returns them or when the separate Pinnacle reference pull matches.
+
+Paper-only. No guarantee of winning.
