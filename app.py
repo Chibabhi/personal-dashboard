@@ -86,7 +86,7 @@ BET365_HINTS = ("bet365",)
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v4.2.1 LOG FIX",
+    page_title="GOAT Shield Live v4.3 HEALTH CHECK",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -1490,8 +1490,8 @@ def render_public_proof_badge(row: Dict[str, Any]) -> None:
 
 
 def main():
-    st.title("🐐 GOAT Shield Live v4.2.1 LOG FIX")
-    st.caption("Alignment Lock + Auto Verify + paper-log save fix. Only HIGH-confidence or FULL GOAT Alignment can be paper-logged. Paper-only.")
+    st.title("🐐 GOAT Shield Live v4.3 HEALTH CHECK")
+    st.caption("Health Check + Alignment Lock + Auto Verify. Shows app status, commands, source checks, and daily safety checklist. Paper-only.")
 
     api_key_default = secret("ODDS_API_KEY", "")
 
@@ -1688,7 +1688,7 @@ def main():
 
     log_df = load_log()
 
-    tabs = st.tabs(["🇳🇿 NZ Bettor Board", "📱 Mobile Cards", "🛡️ Auto Verify", "🔒 Alignment Lock", "🧠 3-Source Alignment", "🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "🛡️ Backup"])
+    tabs = st.tabs(["🇳🇿 NZ Bettor Board", "📱 Mobile Cards", "🛡️ Auto Verify", "🔒 Alignment Lock", "🧠 3-Source Alignment", "🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "🛡️ Backup", "ℹ️ Health Check"])
 
     with tabs[0]:
         st.subheader("🇳🇿 NZ Bettor Board")
@@ -2356,8 +2356,161 @@ def main():
             except Exception as e:
                 st.error(f"Restore failed: {e}")
 
+    with tabs[10]:
+        st.subheader("ℹ️ Health Check / About")
+        st.write("This page tells you whether the app is running correctly, what each command does, and what to check before trusting any paper pick.")
+
+        app_version = "GOAT Shield Live v4.3 HEALTH CHECK"
+        events_health = st.session_state.get("events_v36", [])
+        markets_health = st.session_state.get("markets_v36", markets)
+        metas_health = st.session_state.get("metas_v36", [])
+        pinnacle_ref_health = st.session_state.get("pinnacle_ref_v38", {})
+        last_fetch_raw = st.session_state.get("last_fetch_utc_v41", "")
+        last_fetch_dt = parse_api_datetime(last_fetch_raw) if last_fetch_raw else None
+
+        latest_meta = metas_health[-1] if metas_health else {}
+        requests_used = latest_meta.get("requests_used", "—")
+        requests_remaining = latest_meta.get("requests_remaining", "—")
+
+        log_health = load_log()
+
+        health_rows = []
+        if events_health:
+            try:
+                pinnacle_ref_h = pinnacle_ref_health if rules.get("show_pinnacle_reference") else {}
+                candidates_h = build_candidates(events_health, markets_health, int(rules["min_minutes_before_start"]), pinnacle_ref_h)
+
+                app_count_h = approved_today_count(log_health)
+                streak_h = loss_streak_count(log_health)
+
+                for cand in candidates_h:
+                    decision, score, bucket, reason, plain, action, score_parts = decide(cand, rules, flags, app_count_h, streak_h)
+                    rr = dict(cand)
+                    rr.update({
+                        "decision": decision,
+                        "score": score,
+                        "reject_bucket": bucket,
+                        "reasons": reason,
+                        "plain_explanation": plain,
+                        "action": action,
+                        "score_parts": score_parts,
+                    })
+                    health_rows.append(rr)
+
+                health_rows = apply_auto_verify_to_rows(health_rows, rules, update_snapshot=False)
+                health_rows = apply_alignment_lock_to_rows(health_rows, rules)
+            except Exception as e:
+                st.error(f"Health check could not rebuild candidates: {e}")
+
+        health_df = pd.DataFrame(health_rows)
+
+        api_key_ok = bool(str(api_key).strip())
+        fetch_ok = bool(events_health)
+        pinnacle_matches = len(pinnacle_ref_health) if isinstance(pinnacle_ref_health, dict) else 0
+        conf_counts = auto_verify_summary(health_df) if not health_df.empty else {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+        lock_counts = alignment_lock_summary(health_df) if not health_df.empty else {"UNLOCKED": 0, "LOCKED": 0}
+
+        def status_text(ok: bool) -> str:
+            return "✅ OK" if ok else "❌ CHECK"
+
+        st.markdown("### App status")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Version", app_version.replace("GOAT Shield Live ", ""))
+        c2.metric("API key", "Set" if api_key_ok else "Missing")
+        c3.metric("Last fetch NZ", fmt_dt(last_fetch_dt, NZ_TZ, "NZ") if last_fetch_dt else "Not fetched yet")
+
+        c4, c5, c6 = st.columns(3)
+        c4.metric("Events loaded", len(events_health))
+        c5.metric("Candidates rebuilt", len(health_rows))
+        c6.metric("Markets", ", ".join(markets_health) if markets_health else "—")
+
+        c7, c8, c9 = st.columns(3)
+        c7.metric("Requests used", requests_used)
+        c8.metric("Requests remaining", requests_remaining)
+        c9.metric("Pinnacle matches", pinnacle_matches)
+
+        st.markdown("### Data confidence")
+        d1, d2, d3, d4, d5 = st.columns(5)
+        d1.metric("HIGH", conf_counts.get("HIGH", 0))
+        d2.metric("MEDIUM", conf_counts.get("MEDIUM", 0))
+        d3.metric("LOW", conf_counts.get("LOW", 0))
+        d4.metric("Paper-log unlocked", lock_counts.get("UNLOCKED", 0))
+        d5.metric("Paper-log locked", lock_counts.get("LOCKED", 0))
+
+        st.markdown("### Health verdict")
+        verdicts = []
+        if not api_key_ok:
+            verdicts.append(("❌ API key missing", "Add ODDS_API_KEY in Streamlit secrets."))
+        if not fetch_ok:
+            verdicts.append(("⚠️ No scan loaded", "Go to NZ Bettor Board and press Fetch NZ bettor board."))
+        if fetch_ok and rules.get("show_pinnacle_reference") and pinnacle_matches == 0:
+            verdicts.append(("⚠️ Pinnacle reference missing", "This can happen for some sports/markets, but if it is always zero, check provider coverage or settings."))
+        if fetch_ok and len(health_rows) == 0:
+            verdicts.append(("⚠️ No candidates rebuilt", "Check market/sport selection and API response."))
+        if fetch_ok and conf_counts.get("HIGH", 0) == 0:
+            verdicts.append(("⚠️ No HIGH confidence picks", "Do not paper-log unless Alignment Lock unlocks through FULL GOAT Alignment."))
+        if fetch_ok and lock_counts.get("UNLOCKED", 0) == 0:
+            verdicts.append(("ℹ️ No paper-log unlocked picks", "This is not always bad. It means the shield is blocking weak candidates."))
+
+        if not verdicts:
+            st.success("✅ App looks healthy. Fetch worked, data loaded, confidence checks ran, and Alignment Lock is active.")
+        else:
+            for title, detail in verdicts:
+                if title.startswith("❌"):
+                    st.error(f"{title} — {detail}")
+                elif title.startswith("⚠️"):
+                    st.warning(f"{title} — {detail}")
+                else:
+                    st.info(f"{title} — {detail}")
+
+        st.markdown("### What every command/tab means")
+        command_rows = [
+            {"Command / Tab": "🇳🇿 NZ Bettor Board", "Meaning": "Main scan. Pulls games, odds, Pinnacle reference, Auto Verify, and Alignment Lock."},
+            {"Command / Tab": "Fetch NZ bettor board", "Meaning": "Runs the scan. Press this first, then again after 30–60 seconds for line-movement comparison."},
+            {"Command / Tab": "📱 Mobile Cards", "Meaning": "Best iPhone view. Shows pick, odds, Pinnacle, Auto Verify, and Alignment Lock reason."},
+            {"Command / Tab": "🛡️ Auto Verify", "Meaning": "Shows data confidence, data age, market win %, Pinnacle gap, and line stability."},
+            {"Command / Tab": "🔒 Alignment Lock", "Meaning": "Final gate. Shows which approved/elite picks are unlocked or blocked for paper-log."},
+            {"Command / Tab": "🧠 3-Source Alignment", "Meaning": "Optional manual proof for Sports Alerts, Sports Chat Place, and Picks & Parlays."},
+            {"Command / Tab": "🟢 Best Price Board", "Meaning": "Compares bookmaker prices so you can see best available odds."},
+            {"Command / Tab": "📒 Paper Log", "Meaning": "Stores paper picks only. This is your proof record."},
+            {"Command / Tab": "✅ Results", "Meaning": "Settle paper picks later as Win/Loss/Push and record closing odds."},
+            {"Command / Tab": "📊 Dashboard", "Meaning": "Tracks proof over time: number of picks, ROI, CLV, and system verdict."},
+            {"Command / Tab": "🛡️ Backup", "Meaning": "Download or restore your paper-log CSV."},
+            {"Command / Tab": "ℹ️ Health Check", "Meaning": "This page. Checks if app, API, data, confidence, and lock system look healthy."},
+        ]
+        st.dataframe(pd.DataFrame(command_rows), use_container_width=True, hide_index=True)
+
+        st.markdown("### Daily safe-use checklist")
+        checklist = pd.DataFrame([
+            {"Step": 1, "Check": "Confirm version says v4.3 HEALTH CHECK", "Why": "Avoid running old broken files."},
+            {"Step": 2, "Check": "Press Fetch NZ bettor board", "Why": "Loads latest games and odds."},
+            {"Step": 3, "Check": "Wait 30–60 seconds and Fetch again", "Why": "Lets Auto Verify compare line movement."},
+            {"Step": 4, "Check": "Pinnacle matches are not always zero", "Why": "Confirms sharp-reference coverage when available."},
+            {"Step": 5, "Check": "Open Auto Verify", "Why": "Only trust HIGH data confidence."},
+            {"Step": 6, "Check": "Open Alignment Lock", "Why": "Only paper-log unlocked picks."},
+            {"Step": 7, "Check": "Log paper pick only", "Why": "Build 300-pick proof before real-money thinking."},
+        ])
+        st.dataframe(checklist, use_container_width=True, hide_index=True)
+
+        st.markdown("### Good signs")
+        st.success("Version correct • Fetch works • Requests remaining > 0 • Pinnacle references appear • HIGH confidence exists • Alignment Lock unlocks only clean picks • No red error box")
+
+        st.markdown("### Bad signs")
+        st.error("Old version • Red error box • Requests remaining = 0 • All confidence LOW • Game times look wrong • Pinnacle always zero • Paper Log button errors")
+
+        st.markdown("### Source truth")
+        st.write("Trusted automatic sources:")
+        st.write("1. The Odds API market odds and bookmaker data")
+        st.write("2. Pinnacle reference from The Odds API")
+        st.write("3. Internal calculations: implied probability, home favourite, time safety, line movement, data confidence")
+        st.write("Optional/manual sources only:")
+        st.write("Sports Alerts, Sports Chat Place, Picks & Parlays")
+
+        st.warning("This app is a paper-betting shield, not proof of profit yet. You still need 300 settled paper picks before treating the system as proven.")
+
+
     st.divider()
-    st.caption("GOAT Shield Live v4.2.1 LOG FIX is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v4.3 HEALTH CHECK is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 """
-GOAT Shield Live v4.2.1 LOG FIX
+GOAT Shield Live v4.3 HEALTH CHECK
 Engine is embedded in app.py. This placeholder prevents old import/cache issues.
 """
-VERSION = "v4.2.1-log-fix"
+VERSION = "v4.3-health-check"
