@@ -153,11 +153,30 @@ def required_books_for_candidate(c: Dict[str, Any], rules: Dict[str, Any]) -> Tu
     return int(rules.get("other_sport_books", 5)), "Other/low-coverage sport"
 
 
+def resolved_required_books(c: Dict[str, Any], rules: Dict[str, Any]) -> Tuple[int, str]:
+    """Safe dynamic threshold resolver. Handles None, blank strings, NaN, and cached rows."""
+    fallback_books, fallback_group = required_books_for_candidate(c, rules)
+    raw_books = c.get("required_books", None)
+
+    if raw_books is None or str(raw_books).strip() == "" or str(raw_books).lower() == "nan":
+        books = fallback_books
+    else:
+        try:
+            books = int(float(raw_books))
+        except Exception:
+            books = fallback_books
+
+    group = str(c.get("book_threshold_group", "") or "").strip() or fallback_group
+    c["required_books"] = int(books)
+    c["book_threshold_group"] = group
+    return int(books), group
+
+
 # =========================================================
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v4.4.3 DYNAMIC BOOKS",
+    page_title="GOAT Shield Live v4.4.4 DYNAMIC FIX",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -808,7 +827,7 @@ def goat_score_breakdown(c: Dict[str, Any], rules: Dict[str, Any], flags: Dict[s
         "NZD decimal odds range": score_odds_range(float(c.get("best_odds", 0)), float(rules["min_decimal_odds"]), float(rules["max_decimal_odds"])),
         "Bookmaker support": score_book_support(
             int(c.get("books", 0)),
-            int(c.get("required_books", required_books_for_candidate(c, rules)[0])),
+            int(resolved_required_books(c, rules)[0]),
             bool(c.get("pinnacle_ok")),
             bool(c.get("pinnacle_available")),
             c.get("pinnacle_gap_pct"),
@@ -839,8 +858,7 @@ def plain_explanation(decision: str, c: Dict[str, Any], reason: str, rules: Dict
     if "APPROVED" in decision or "ELITE" in decision:
         return "Passed no-edge GOAT checks: NZD decimal odds range, bookmaker support, NZ/US time safety, and discipline rules." + pin_line + " Paper log only."
     if "LOW BOOK COVERAGE" in decision:
-        required_books = int(c.get("required_books", required_books_for_candidate(c, rules)[0]))
-        threshold_group = c.get("book_threshold_group", required_books_for_candidate(c, rules)[1])
+        required_books, threshold_group = resolved_required_books(c, rules)
         return f"Only {c.get('books', 0)} bookmaker prices were compared. Required for this sport: {required_books} ({threshold_group}). Not enough market coverage."
     if "RETAIL ONLY" in decision:
         return f"Only retail/soft-book support was detected. Sharp status: {c.get('sharp_status', 'unknown')}. Keep as watchlist only."
@@ -878,13 +896,11 @@ def action_text(decision: str) -> str:
 
 
 def decide(c: Dict[str, Any], rules: Dict[str, Any], flags: Dict[str, bool], approved_count: int, loss_streak: int):
+    min_books, threshold_group = resolved_required_books(c, rules)
     parts = goat_score_breakdown(c, rules, flags, approved_count, loss_streak)
     score = goat_score_total(parts)
     min_odds = float(rules["min_decimal_odds"])
     max_odds = float(rules["max_decimal_odds"])
-    min_books, threshold_group = required_books_for_candidate(c, rules)
-    c["required_books"] = int(min_books)
-    c["book_threshold_group"] = str(threshold_group)
 
     if c.get("time_locked"):
         decision, bucket, reason = "LOCKED — TIME WINDOW", "Time window", c.get("time_status", "Game time locked")
@@ -1094,9 +1110,7 @@ def confidence_parts(c: Dict[str, Any], rules: Dict[str, Any], previous: Optiona
     passed = []
     warnings = []
 
-    min_books, threshold_group = required_books_for_candidate(c, rules)
-    c["required_books"] = int(min_books)
-    c["book_threshold_group"] = str(threshold_group)
+    min_books, threshold_group = resolved_required_books(c, rules)
     max_stale = float(rules.get("max_stale_seconds", 180))
     max_line_move = float(rules.get("max_line_move_pct", 3.0))
     min_odds = float(rules.get("min_decimal_odds", 1.40))
@@ -1649,8 +1663,8 @@ def render_public_proof_badge(row: Dict[str, Any]) -> None:
 
 
 def main():
-    st.title("🐐 GOAT Shield Live v4.4.3 DYNAMIC BOOKS")
-    st.caption("Picks Mode + Dynamic Bookmaker Thresholds. Major sports need 10 books, WNBA/MLS 8, college 6, plus sharp/core support. Paper-only.")
+    st.title("🐐 GOAT Shield Live v4.4.4 DYNAMIC FIX")
+    st.caption("Dynamic Bookmaker Thresholds + TypeError fix. Major sports need 10 books, WNBA/MLS 8, college 6, plus sharp/core support. Paper-only.")
 
     api_key_default = secret("ODDS_API_KEY", "")
 
@@ -2703,7 +2717,7 @@ def main():
         st.subheader("ℹ️ Health Check / About")
         st.write("This page tells you whether the app is running correctly, what each command does, and what to check before trusting any paper pick.")
 
-        app_version = "GOAT Shield Live v4.4.3 DYNAMIC BOOKS"
+        app_version = "GOAT Shield Live v4.4.4 DYNAMIC FIX"
         events_health = st.session_state.get("events_v36", [])
         markets_health = st.session_state.get("markets_v36", markets)
         metas_health = st.session_state.get("metas_v36", [])
@@ -2839,7 +2853,7 @@ def main():
 
         st.markdown("### Daily safe-use checklist")
         checklist = pd.DataFrame([
-            {"Step": 1, "Check": "Confirm version says v4.4.3 DYNAMIC BOOKS", "Why": "Avoid running old broken files."},
+            {"Step": 1, "Check": "Confirm version says v4.4.4 DYNAMIC FIX", "Why": "Avoid running old broken files."},
             {"Step": 2, "Check": "Press Fetch NZ bettor board", "Why": "Loads latest games and odds."},
             {"Step": 3, "Check": "Wait 30–60 seconds and Fetch again", "Why": "Lets Auto Verify compare line movement."},
             {"Step": 4, "Check": "Pinnacle/sharp support and dynamic bookmaker thresholds look healthy", "Why": "Confirms sharp-reference and sport-specific bookmaker coverage when available."},
@@ -2869,7 +2883,7 @@ def main():
 
 
     st.divider()
-    st.caption("GOAT Shield Live v4.4.3 DYNAMIC BOOKS is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v4.4.4 DYNAMIC FIX is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":
