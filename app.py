@@ -58,6 +58,11 @@ DEFAULT_RULES = {
     "min_sharp_books": 1,
     "sharp_support_score_bonus": True,
     "retail_only_warning": True,
+    "dynamic_book_thresholds": True,
+    "major_sport_books": 10,
+    "mid_sport_books": 8,
+    "college_sport_books": 6,
+    "other_sport_books": 5,
 }
 
 FALLBACK_SPORTS = {
@@ -103,12 +108,56 @@ SHARP_BOOK_HINTS = (
     "smarkets",
 )
 
+MAJOR_BOOK_SPORTS = {
+    "baseball_mlb",
+    "basketball_nba",
+    "americanfootball_nfl",
+    "icehockey_nhl",
+}
+
+MID_BOOK_SPORTS = {
+    "basketball_wnba",
+    "soccer_usa_mls",
+}
+
+COLLEGE_BOOK_SPORTS = {
+    "americanfootball_ncaaf",
+    "basketball_ncaab",
+    "basketball_ncaawb",
+}
+
+
+def required_books_for_candidate(c: Dict[str, Any], rules: Dict[str, Any]) -> Tuple[int, str]:
+    """Dynamic bookmaker threshold by sport. Falls back to the manual/global setting."""
+    if not rules.get("dynamic_book_thresholds", True):
+        return int(rules.get("min_books_compared", 10)), "Manual/global threshold"
+
+    sport_key = str(c.get("sport_key", "") or "").lower()
+    sport_title = str(c.get("sport", c.get("sport_title", "")) or "").lower()
+
+    if sport_key in MAJOR_BOOK_SPORTS:
+        return int(rules.get("major_sport_books", 10)), "Major US sport"
+    if sport_key in MID_BOOK_SPORTS:
+        return int(rules.get("mid_sport_books", 8)), "WNBA/MLS"
+    if sport_key in COLLEGE_BOOK_SPORTS:
+        return int(rules.get("college_sport_books", 6)), "College sport"
+
+    # Fallback by title text in case an API sport key changes slightly.
+    if any(x in sport_title for x in ["mlb", "nba", "nfl", "nhl"]):
+        return int(rules.get("major_sport_books", 10)), "Major US sport"
+    if any(x in sport_title for x in ["wnba", "mls"]):
+        return int(rules.get("mid_sport_books", 8)), "WNBA/MLS"
+    if any(x in sport_title for x in ["college", "ncaa", "ncaab", "ncaaf", "ncaawb"]):
+        return int(rules.get("college_sport_books", 6)), "College sport"
+
+    return int(rules.get("other_sport_books", 5)), "Other/low-coverage sport"
+
 
 # =========================================================
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v4.4.2 SHARP BOOKS",
+    page_title="GOAT Shield Live v4.4.3 DYNAMIC BOOKS",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -680,6 +729,8 @@ def build_candidates(events: List[Dict[str, Any]], selected_markets: List[str], 
                 "implied_prob": round(implied, 5),
                 "edge": round(edge, 5),
                 "books": len(group),
+                "required_books": None,
+                "book_threshold_group": "",
                 "home_pick": is_home,
                 "home_fav": is_home_fav,
                 "pinnacle_ok": bool(pin_best and best["price"] >= pin_best["price"]),
@@ -757,7 +808,7 @@ def goat_score_breakdown(c: Dict[str, Any], rules: Dict[str, Any], flags: Dict[s
         "NZD decimal odds range": score_odds_range(float(c.get("best_odds", 0)), float(rules["min_decimal_odds"]), float(rules["max_decimal_odds"])),
         "Bookmaker support": score_book_support(
             int(c.get("books", 0)),
-            int(rules["min_books_compared"]),
+            int(c.get("required_books", required_books_for_candidate(c, rules)[0])),
             bool(c.get("pinnacle_ok")),
             bool(c.get("pinnacle_available")),
             c.get("pinnacle_gap_pct"),
@@ -788,7 +839,9 @@ def plain_explanation(decision: str, c: Dict[str, Any], reason: str, rules: Dict
     if "APPROVED" in decision or "ELITE" in decision:
         return "Passed no-edge GOAT checks: NZD decimal odds range, bookmaker support, NZ/US time safety, and discipline rules." + pin_line + " Paper log only."
     if "LOW BOOK COVERAGE" in decision:
-        return f"Only {c.get('books', 0)} bookmaker prices were compared. Your minimum is {rules['min_books_compared']}. Not enough market coverage."
+        required_books = int(c.get("required_books", required_books_for_candidate(c, rules)[0]))
+        threshold_group = c.get("book_threshold_group", required_books_for_candidate(c, rules)[1])
+        return f"Only {c.get('books', 0)} bookmaker prices were compared. Required for this sport: {required_books} ({threshold_group}). Not enough market coverage."
     if "RETAIL ONLY" in decision:
         return f"Only retail/soft-book support was detected. Sharp status: {c.get('sharp_status', 'unknown')}. Keep as watchlist only."
     if "ODDS RANGE" in decision:
@@ -829,7 +882,9 @@ def decide(c: Dict[str, Any], rules: Dict[str, Any], flags: Dict[str, bool], app
     score = goat_score_total(parts)
     min_odds = float(rules["min_decimal_odds"])
     max_odds = float(rules["max_decimal_odds"])
-    min_books = int(rules["min_books_compared"])
+    min_books, threshold_group = required_books_for_candidate(c, rules)
+    c["required_books"] = int(min_books)
+    c["book_threshold_group"] = str(threshold_group)
 
     if c.get("time_locked"):
         decision, bucket, reason = "LOCKED — TIME WINDOW", "Time window", c.get("time_status", "Game time locked")
@@ -852,7 +907,7 @@ def decide(c: Dict[str, Any], rules: Dict[str, Any], flags: Dict[str, bool], app
         elif not (min_odds <= c["best_odds"] <= max_odds):
             decision, bucket, reason = "REJECTED — ODDS RANGE", "Odds range", f"Best decimal odds {c['best_odds']:.2f} outside {min_odds:.2f}-{max_odds:.2f}"
         elif int(c.get("books", 0)) < min_books:
-            decision, bucket, reason = "WATCHLIST — LOW BOOK COVERAGE", "Low book coverage", f"Only {c.get('books', 0)} books compared; minimum is {min_books}"
+            decision, bucket, reason = "WATCHLIST — LOW BOOK COVERAGE", "Low book coverage", f"Only {c.get('books', 0)} books compared; required for this sport is {min_books} ({threshold_group})"
         elif rules.get("require_sharp_support", True) and int(c.get("sharp_core_count", 0)) < int(rules.get("min_sharp_books", 1)):
             decision, bucket, reason = "WATCHLIST — RETAIL ONLY", "No sharp support", f"No sharp/core bookmaker support detected. Need at least {int(rules.get('min_sharp_books', 1))} sharp/core source."
         elif rules["apply_home_rules_to_team_markets"] and c["market"] in ("h2h", "spreads") and rules["require_home_pick"] and not c["home_pick"]:
@@ -1039,7 +1094,9 @@ def confidence_parts(c: Dict[str, Any], rules: Dict[str, Any], previous: Optiona
     passed = []
     warnings = []
 
-    min_books = int(rules.get("min_books_compared", 5))
+    min_books, threshold_group = required_books_for_candidate(c, rules)
+    c["required_books"] = int(min_books)
+    c["book_threshold_group"] = str(threshold_group)
     max_stale = float(rules.get("max_stale_seconds", 180))
     max_line_move = float(rules.get("max_line_move_pct", 3.0))
     min_odds = float(rules.get("min_decimal_odds", 1.40))
@@ -1047,10 +1104,10 @@ def confidence_parts(c: Dict[str, Any], rules: Dict[str, Any], previous: Optiona
 
     books = int(c.get("books", 0))
     if books >= min_books:
-        passed.append(f"{books} bookmakers compared")
+        passed.append(f"{books} bookmakers compared; required {min_books} for {threshold_group}")
     else:
         score -= 20
-        warnings.append(f"Only {books} bookmakers compared; minimum is {min_books}")
+        warnings.append(f"Only {books} bookmakers compared; required {min_books} for {threshold_group}")
 
     if c.get("pinnacle_available"):
         gap = c.get("pinnacle_gap_pct")
@@ -1592,8 +1649,8 @@ def render_public_proof_badge(row: Dict[str, Any]) -> None:
 
 
 def main():
-    st.title("🐐 GOAT Shield Live v4.4.2 SHARP BOOKS")
-    st.caption("Picks Mode + Sharp Bookmaker Priority. Requires 10+ books and sharp/core support where available. Odds 1.40-1.90. Paper-only.")
+    st.title("🐐 GOAT Shield Live v4.4.3 DYNAMIC BOOKS")
+    st.caption("Picks Mode + Dynamic Bookmaker Thresholds. Major sports need 10 books, WNBA/MLS 8, college 6, plus sharp/core support. Paper-only.")
 
     api_key_default = secret("ODDS_API_KEY", "")
 
@@ -1713,7 +1770,28 @@ def main():
         rules.setdefault("picks_mode_high_conf_only", True)
         rules["min_decimal_odds"] = st.number_input("Min NZD decimal odds", 1.01, 10.0, float(rules["min_decimal_odds"]), 0.01)
         rules["max_decimal_odds"] = st.number_input("Max NZD decimal odds", 1.01, 10.0, float(rules["max_decimal_odds"]), 0.01)
-        rules["min_books_compared"] = st.number_input("Minimum bookmakers compared", 1, 30, int(rules["min_books_compared"]), 1)
+        rules.setdefault("dynamic_book_thresholds", True)
+        rules.setdefault("major_sport_books", 10)
+        rules.setdefault("mid_sport_books", 8)
+        rules.setdefault("college_sport_books", 6)
+        rules.setdefault("other_sport_books", 5)
+
+        rules["dynamic_book_thresholds"] = st.checkbox(
+            "Dynamic bookmaker threshold by sport",
+            bool(rules.get("dynamic_book_thresholds", True)),
+            help="Major US sports need more books; WNBA/MLS and college need slightly fewer due coverage.",
+        )
+
+        if rules.get("dynamic_book_thresholds", True):
+            st.caption("Dynamic defaults: MLB/NBA/NFL/NHL = 10 books, WNBA/MLS = 8, college = 6, other = 5.")
+            rules["major_sport_books"] = st.number_input("Major sports required books", 5, 30, int(rules.get("major_sport_books", 10)), 1)
+            rules["mid_sport_books"] = st.number_input("WNBA/MLS required books", 5, 30, int(rules.get("mid_sport_books", 8)), 1)
+            rules["college_sport_books"] = st.number_input("College required books", 4, 30, int(rules.get("college_sport_books", 6)), 1)
+            rules["other_sport_books"] = st.number_input("Other sports required books", 3, 30, int(rules.get("other_sport_books", 5)), 1)
+            rules["min_books_compared"] = int(rules.get("major_sport_books", 10))
+        else:
+            rules["min_books_compared"] = st.number_input("Minimum bookmakers compared", 1, 30, int(rules["min_books_compared"]), 1)
+
         rules["require_sharp_support"] = st.checkbox(
             "Require sharp/core bookmaker support",
             bool(rules.get("require_sharp_support", True)),
@@ -1961,7 +2039,7 @@ def main():
                     "pinnacle", "pinnacle_gap_pct", "pinnacle_status", "sharp_status", "sharp_core_count", "sharp_books", "retail_books_count", "tab_betcha", "bet365",
                     "data_confidence", "data_confidence_score", "data_age", "line_stability",
                     "log_lock_status", "log_lock_reason", "alignment_status_saved", "parlay_leg_status_saved",
-                    "price_lift_pct", "books", "reasons", "data_confidence_reasons", "score_parts", "all_prices",
+                    "price_lift_pct", "books", "required_books", "book_threshold_group", "reasons", "data_confidence_reasons", "score_parts", "all_prices",
                 ]
                 st.dataframe(
                     board[cols].style.format({"best_odds": "{:.2f}", "avg_odds": "{:.2f}", "market_win_pct": "{:.2f}%", "best_implied_win_pct": "{:.2f}%", "price_lift_pct": "{:.2f}%", "pinnacle": "{:.2f}", "pinnacle_gap_pct": "{:.2f}%"}),
@@ -1978,7 +2056,7 @@ def main():
                     st.info("No closest misses.")
                 else:
                     st.dataframe(
-                        missed[["decision", "score", "data_confidence", "data_confidence_score", "plain_explanation", "action", "time_status", "starts_in", "start_nz", "start_et", "market_label", "pick", "best_odds", "best_bookmaker", "pinnacle", "pinnacle_gap_pct", "pinnacle_status", "sharp_status", "sharp_books", "price_lift_pct", "reasons", "data_confidence_reasons", "all_prices"]].style.format({"best_odds": "{:.2f}", "pinnacle": "{:.2f}", "pinnacle_gap_pct": "{:.2f}%", "price_lift_pct": "{:.2f}%"}),
+                        missed[["decision", "score", "data_confidence", "data_confidence_score", "plain_explanation", "action", "time_status", "starts_in", "start_nz", "start_et", "market_label", "pick", "best_odds", "best_bookmaker", "pinnacle", "pinnacle_gap_pct", "pinnacle_status", "sharp_status", "sharp_books", "books", "required_books", "book_threshold_group", "price_lift_pct", "reasons", "data_confidence_reasons", "all_prices"]].style.format({"best_odds": "{:.2f}", "pinnacle": "{:.2f}", "pinnacle_gap_pct": "{:.2f}%", "price_lift_pct": "{:.2f}%"}),
                         use_container_width=True,
                         hide_index=True,
                     )
@@ -1996,7 +2074,7 @@ def main():
                     if not locked_rows.empty:
                         st.warning(f"Alignment Lock blocked {len(locked_rows)} approved/elite candidate(s) from paper-log.")
                         st.dataframe(
-                            locked_rows[["decision", "score", "data_confidence", "data_confidence_score", "pick", "best_odds", "sharp_status", "sharp_books", "log_lock_status", "log_lock_reason", "alignment_status_saved"]].style.format({"best_odds": "{:.2f}"}),
+                            locked_rows[["decision", "score", "data_confidence", "data_confidence_score", "pick", "best_odds", "sharp_status", "sharp_books", "books", "required_books", "book_threshold_group", "log_lock_status", "log_lock_reason", "alignment_status_saved"]].style.format({"best_odds": "{:.2f}"}),
                             use_container_width=True,
                             hide_index=True,
                         )
@@ -2037,6 +2115,9 @@ def main():
                                 "sharp_core_count": chosen.get("sharp_core_count", ""),
                                 "sharp_books": chosen.get("sharp_books", ""),
                                 "retail_books_count": chosen.get("retail_books_count", ""),
+                                "books": chosen.get("books", ""),
+                                "required_books": chosen.get("required_books", ""),
+                                "book_threshold_group": chosen.get("book_threshold_group", ""),
                                 "tab_betcha": chosen.get("tab_betcha", ""),
                                 "bet365": chosen.get("bet365", ""),
                                 "price_lift_pct": chosen.get("price_lift_pct", ""),
@@ -2144,7 +2225,7 @@ def main():
                         show_cols = [
                             "decision", "score", "data_confidence", "data_confidence_score",
                             "sport", "game", "market_label", "pick", "best_odds", "best_bookmaker",
-                            "market_win_pct", "pinnacle", "pinnacle_gap_pct", "sharp_status", "sharp_core_count", "sharp_books", "books",
+                            "market_win_pct", "pinnacle", "pinnacle_gap_pct", "sharp_status", "sharp_core_count", "sharp_books", "books", "required_books", "book_threshold_group",
                             "time_status", "starts_in", "start_nz", "start_et",
                             "log_lock_status", "log_lock_reason",
                         ]
@@ -2170,6 +2251,7 @@ def main():
                                 st.markdown(f"**Book:** {row.get('best_bookmaker', '')}")
                                 st.markdown(f"**Auto Verify:** {row.get('data_confidence', '')} ({row.get('data_confidence_score', '')}/100)")
                                 st.markdown(f"**Sharp/Core:** {row.get('sharp_status', 'Unknown')}")
+                                st.markdown(f"**Book coverage:** {row.get('books', 0)} / required {row.get('required_books', '?')} ({row.get('book_threshold_group', '')})")
                                 st.markdown(f"**Time:** {row.get('time_status', '')} • starts in {row.get('starts_in', '')}")
                                 st.caption(f"Lock: {row.get('log_lock_status', '')} — {row.get('log_lock_reason', '')}")
 
@@ -2264,7 +2346,7 @@ def main():
                 show_cols = [
                     "data_confidence", "data_confidence_score", "decision", "score",
                     "sport", "game", "pick", "best_odds", "market_win_pct", "best_implied_win_pct",
-                    "pinnacle", "pinnacle_gap_pct", "sharp_status", "sharp_core_count", "sharp_books", "books", "data_age", "line_stability",
+                    "pinnacle", "pinnacle_gap_pct", "sharp_status", "sharp_core_count", "sharp_books", "books", "required_books", "book_threshold_group", "data_age", "line_stability",
                     "log_lock_status", "log_lock_reason",
                     "data_confidence_reasons", "data_confidence_passed",
                 ]
@@ -2333,7 +2415,7 @@ def main():
                         "data_confidence", "data_confidence_score",
                         "alignment_status_saved", "parlay_leg_status_saved",
                         "sport", "game", "pick", "best_odds", "pinnacle", "pinnacle_gap_pct",
-                        "sharp_status", "sharp_core_count", "sharp_books",
+                        "sharp_status", "sharp_core_count", "sharp_books", "books", "required_books", "book_threshold_group",
                         "log_lock_reason",
                     ]
                     st.dataframe(
@@ -2621,7 +2703,7 @@ def main():
         st.subheader("ℹ️ Health Check / About")
         st.write("This page tells you whether the app is running correctly, what each command does, and what to check before trusting any paper pick.")
 
-        app_version = "GOAT Shield Live v4.4.2 SHARP BOOKS"
+        app_version = "GOAT Shield Live v4.4.3 DYNAMIC BOOKS"
         events_health = st.session_state.get("events_v36", [])
         markets_health = st.session_state.get("markets_v36", markets)
         metas_health = st.session_state.get("metas_v36", [])
@@ -2672,6 +2754,7 @@ def main():
         lock_counts = alignment_lock_summary(health_df) if not health_df.empty else {"UNLOCKED": 0, "LOCKED": 0}
         sharp_supported_count = int(health_df["sharp_support"].fillna(False).astype(bool).sum()) if not health_df.empty and "sharp_support" in health_df.columns else 0
         retail_only_count = int(len(health_df) - sharp_supported_count) if not health_df.empty else 0
+        below_required_books = int((health_df["books"].fillna(0).astype(float) < health_df["required_books"].fillna(0).astype(float)).sum()) if not health_df.empty and "required_books" in health_df.columns else 0
 
         def status_text(ok: bool) -> str:
             return "✅ OK" if ok else "❌ CHECK"
@@ -2692,10 +2775,11 @@ def main():
         c8.metric("Requests remaining", requests_remaining)
         c9.metric("Pinnacle matches", pinnacle_matches)
 
-        s1, s2, s3 = st.columns(3)
+        s1, s2, s3, s4 = st.columns(4)
         s1.metric("Sharp-supported candidates", sharp_supported_count)
         s2.metric("Retail-only candidates", retail_only_count)
-        s3.metric("Sharp rule", "ON" if rules.get("require_sharp_support", True) else "OFF")
+        s3.metric("Below required books", below_required_books)
+        s4.metric("Dynamic books", "ON" if rules.get("dynamic_book_thresholds", True) else "OFF")
 
         st.markdown("### Data confidence")
         d1, d2, d3, d4, d5 = st.columns(5)
@@ -2717,6 +2801,8 @@ def main():
             verdicts.append(("⚠️ No candidates rebuilt", "Check market/sport selection and API response."))
         if fetch_ok and conf_counts.get("HIGH", 0) == 0:
             verdicts.append(("⚠️ No HIGH confidence picks", "Do not paper-log unless Alignment Lock unlocks through FULL GOAT Alignment."))
+        if fetch_ok and below_required_books > 0:
+            verdicts.append(("ℹ️ Some candidates below sport-specific bookmaker threshold", "This is normal. Dynamic threshold is filtering by sport coverage instead of using one fixed number."))
         if fetch_ok and rules.get("require_sharp_support", True) and sharp_supported_count == 0:
             verdicts.append(("⚠️ No sharp/core support found", "Do not paper-log retail-only candidates. Check sport/region coverage or wait for better market depth."))
         if fetch_ok and lock_counts.get("UNLOCKED", 0) == 0:
@@ -2737,7 +2823,7 @@ def main():
         command_rows = [
             {"Command / Tab": "🇳🇿 NZ Bettor Board", "Meaning": "Main scan. Pulls games, odds, Pinnacle reference, Auto Verify, and Alignment Lock."},
             {"Command / Tab": "Fetch NZ bettor board", "Meaning": "Runs the scan. Press this first, then again after 30–60 seconds for line-movement comparison."},
-            {"Command / Tab": "🎯 Picks", "Meaning": "Shows only qualifying unlocked paper picks in your 1.40-1.90 odds range, with 10+ books and sharp/core support when available."},
+            {"Command / Tab": "🎯 Picks", "Meaning": "Shows only qualifying unlocked paper picks in your 1.40-1.90 odds range, using dynamic bookmaker thresholds and sharp/core support."},
             {"Command / Tab": "📱 Mobile Cards", "Meaning": "Best iPhone view. Shows pick, odds, Pinnacle, Auto Verify, and Alignment Lock reason."},
             {"Command / Tab": "🛡️ Auto Verify", "Meaning": "Shows data confidence, data age, market win %, Pinnacle gap, sharp/core support, and line stability."},
             {"Command / Tab": "🔒 Alignment Lock", "Meaning": "Final gate. Shows which approved/elite picks are unlocked or blocked for paper-log."},
@@ -2753,10 +2839,10 @@ def main():
 
         st.markdown("### Daily safe-use checklist")
         checklist = pd.DataFrame([
-            {"Step": 1, "Check": "Confirm version says v4.4 PICKS MODE", "Why": "Avoid running old broken files."},
+            {"Step": 1, "Check": "Confirm version says v4.4.3 DYNAMIC BOOKS", "Why": "Avoid running old broken files."},
             {"Step": 2, "Check": "Press Fetch NZ bettor board", "Why": "Loads latest games and odds."},
             {"Step": 3, "Check": "Wait 30–60 seconds and Fetch again", "Why": "Lets Auto Verify compare line movement."},
-            {"Step": 4, "Check": "Pinnacle matches are not always zero", "Why": "Confirms sharp-reference coverage when available."},
+            {"Step": 4, "Check": "Pinnacle/sharp support and dynamic bookmaker thresholds look healthy", "Why": "Confirms sharp-reference and sport-specific bookmaker coverage when available."},
             {"Step": 5, "Check": "Open Picks, Auto Verify, and Alignment Lock", "Why": "Only use qualifying HIGH-confidence paper picks."},
             {"Step": 6, "Check": "Open Alignment Lock", "Why": "Only paper-log unlocked picks; hide games after +5 minutes."},
             {"Step": 7, "Check": "Log paper pick only", "Why": "Build 300-pick proof before real-money thinking."},
@@ -2774,7 +2860,8 @@ def main():
         st.write("1. The Odds API market odds and bookmaker data")
         st.write("2. Pinnacle reference from The Odds API")
         st.write("3. Sharp/core support detection: Pinnacle reference plus returned books/exchanges such as Circa, BookMaker/CRIS, Betfair, Matchbook, or Smarkets when available")
-        st.write("4. Internal calculations: implied probability, home favourite, time safety, line movement, data confidence")
+        st.write("4. Dynamic bookmaker threshold: MLB/NBA/NFL/NHL need 10, WNBA/MLS need 8, college need 6, other sports need 5 by default")
+        st.write("5. Internal calculations: implied probability, home favourite, time safety, line movement, data confidence")
         st.write("Optional/manual sources only:")
         st.write("Sports Alerts, Sports Chat Place, Picks & Parlays")
 
@@ -2782,7 +2869,7 @@ def main():
 
 
     st.divider()
-    st.caption("GOAT Shield Live v4.4.2 SHARP BOOKS is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v4.4.3 DYNAMIC BOOKS is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":

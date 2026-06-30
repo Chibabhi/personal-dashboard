@@ -1,4 +1,4 @@
-# iPhone install guide — v4.4.2 Sharp Books
+# iPhone install guide — v4.4.3 Dynamic Books
 
 Unzip first. Do not upload only the ZIP to GitHub.
 
@@ -16,11 +16,16 @@ Then:
 3. If old version stays, clear cache/reboot.
 
 Success title:
-GOAT Shield Live v4.4.2 SHARP BOOKS
+GOAT Shield Live v4.4.3 DYNAMIC BOOKS
 
-How to use:
-1. Fetch NZ Bettor Board.
-2. Wait 30–60 seconds.
-3. Fetch again.
-4. Open 🎯 Picks.
-5. Only paper-log unlocked HIGH-confidence picks with 10+ books and sharp/core support.
+Best default settings:
+- Dynamic bookmaker threshold by sport: ON
+- Major sports required books: 10
+- WNBA/MLS required books: 8
+- College required books: 6
+- Other sports required books: 5
+- Require sharp/core support: ON
+- Minimum sharp/core sources: 1
+- Odds range: 1.40-1.90
+- Auto Verify: ON
+- Alignment Lock: ON

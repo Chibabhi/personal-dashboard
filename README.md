@@ -1,33 +1,29 @@
-# GOAT Shield Live v4.4.2 — Sharp Bookmaker Priority
+# GOAT Shield Live v4.4.3 — Dynamic Bookmaker Thresholds
 
-This version adds a sharp/core bookmaker support layer.
+This version replaces one fixed bookmaker requirement with sport-specific thresholds.
 
-## v4.4.2 upgrade
+## v4.4.3 upgrade
 
-- Keeps minimum bookmakers compared default: 10
-- Adds sharp/core support detection
-- Counts Pinnacle reference as sharp support when available
-- Detects returned books/exchanges such as:
-  - Pinnacle
-  - Circa
-  - BookMaker / CRIS
-  - Betfair / Betfair Exchange
-  - Matchbook
-  - Smarkets
-- Adds fields:
-  - sharp_support
-  - sharp_core_count
-  - sharp_books
-  - sharp_status
-  - retail_books_count
-- Auto Verify penalises retail-only support
-- Decision engine moves retail-only picks to WATCHLIST by default
-- Picks tab shows sharp/core status
-- Health Check shows sharp-supported vs retail-only candidates
+Default dynamic thresholds:
 
-## Important
+- MLB / NBA / NFL / NHL: 10 bookmakers required
+- WNBA / MLS: 8 bookmakers required
+- College sports: 6 bookmakers required
+- Other / low-coverage sports: 5 bookmakers required
 
-This does not guarantee the “best books on Earth” are available.
-It detects and uses sharp/core books only when The Odds API returns them or when the separate Pinnacle reference pull matches.
+Still included:
+
+- Sharp/core bookmaker support
+- Minimum sharp/core sources
+- Pinnacle reference
+- Auto Verify
+- Alignment Lock
+- Picks Mode
+- Health Check
+
+## Why
+
+Using 10 books for every sport can block too many WNBA, MLS, or college candidates because coverage may be lower.
+Dynamic thresholds keep major sports strict while allowing smaller markets to be tested on paper only when sharp support and other rules still pass.
 
 Paper-only. No guarantee of winning.
