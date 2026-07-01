@@ -1,28 +1,31 @@
-# GOAT Shield Live v4.4.5 — Loose Dynamic Books
+# GOAT Shield Live v4.6 — Auto Mode
 
-This version loosens the required bookmaker coverage while keeping the main safety shield.
+This version adds automatic paper shortlisting while keeping Research Guard honest.
 
-## New default bookmaker thresholds
+## New tab
 
-- MLB / NBA / NFL / NHL: 8 books required
-- WNBA / MLS: 6 books required
-- College sports: 5 books required
-- Other / low-coverage sports: 4 books required
+- 🤖 Auto Mode
 
-## Still protected by
+## New settings
 
-- Sharp/core bookmaker support required
-- Minimum sharp/core sources = 1
-- Odds range 1.40-1.90
-- Auto Verify
-- Alignment Lock
-- HIGH-confidence-only Picks tab
-- Home team / home favourite rules
-- 5-minute post-start grace window
+- Auto Research Assist
+- Auto-clear indoor weather
+- Allow Market-Only Auto paper picks
 
-## Why
+## Important
 
-The previous requirements were very strict and could block too many paper-test candidates.
-This version keeps quality checks but allows more candidates to reach paper-test review.
+Full sports research cannot be safely automatic unless you connect reliable data APIs for injuries, lineups, starters, stats, standings, weather, and news.
 
-Paper-only. No guarantee of winning.
+This version does not fake that data.
+
+By default:
+- Research Guard still blocks unknown research.
+- Auto Mode shows what is market-clean.
+- Market-Only Auto paper picks are OFF.
+
+If you turn ON Market-Only Auto paper picks:
+- HIGH-confidence market picks can pass even when research is unknown.
+- The app labels this clearly as market-only.
+- Paper testing only.
+
+No real-money betting. No guarantee of winning.

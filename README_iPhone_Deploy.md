@@ -1,4 +1,4 @@
-# iPhone install guide — v4.4.5 Loose Books
+# iPhone install guide — v4.6 Auto Mode
 
 Unzip first. Do not upload only the ZIP to GitHub.
 
@@ -15,16 +15,13 @@ Then:
 3. If old version stays, clear cache/reboot.
 
 Success title:
-GOAT Shield Live v4.4.5 LOOSE BOOKS
+GOAT Shield Live v4.6 AUTO MODE
 
-Best default settings:
-- Dynamic bookmaker threshold by sport: ON
-- Major sports required books: 8
-- WNBA/MLS required books: 6
-- College required books: 5
-- Other sports required books: 4
-- Require sharp/core support: ON
-- Minimum sharp/core sources: 1
-- Odds range: 1.40-1.90
-- Auto Verify: ON
-- Alignment Lock: ON
+Recommended safe use:
+1. Fetch NZ Bettor Board.
+2. Wait 30-60 seconds.
+3. Fetch again.
+4. Open 🤖 Auto Mode.
+5. Keep Market-Only Auto paper picks OFF if you want strict research.
+6. Turn it ON only for paper-testing automatic market picks.
+7. Never use this for real-money auto betting.

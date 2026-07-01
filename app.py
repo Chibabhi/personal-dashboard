@@ -24,6 +24,7 @@ except Exception:
 # =========================================================
 ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 PICKS_PATH = Path("data/paper_picks.csv")
+RESEARCH_PATH = Path("data/research_checks.csv")
 
 NZ_TZ_NAME = "Pacific/Auckland"
 ET_TZ_NAME = "America/New_York"
@@ -63,6 +64,12 @@ DEFAULT_RULES = {
     "mid_sport_books": 6,
     "college_sport_books": 5,
     "other_sport_books": 4,
+    "research_guard_mode": True,
+    "require_research_clear_to_log": True,
+    "reject_research_red_flags": True,
+    "auto_research_mode": True,
+    "auto_clear_indoor_weather": True,
+    "allow_market_only_auto_paper": False,
 }
 
 FALLBACK_SPORTS = {
@@ -176,7 +183,7 @@ def resolved_required_books(c: Dict[str, Any], rules: Dict[str, Any]) -> Tuple[i
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v4.4.5 LOOSE BOOKS",
+    page_title="GOAT Shield Live v4.6 AUTO MODE",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -1025,6 +1032,9 @@ def render_candidate_card(row: dict, idx: int):
         else:
             st.success("Auto Verify passed: " + str(row.get("data_confidence_passed", "High confidence")))
 
+        st.markdown(f"**Research Guard:** {row.get('research_status', 'PENDING')}")
+        st.caption(str(row.get("research_reason", "")))
+
         lock_status = str(row.get("log_lock_status", "LOCK STATUS UNKNOWN"))
         lock_reason = str(row.get("log_lock_reason", ""))
         if bool(row.get("paper_log_allowed", False)):
@@ -1273,6 +1283,218 @@ def auto_verify_summary(board: pd.DataFrame) -> Dict[str, Any]:
     }
 
 
+
+# =========================================================
+# RESEARCH GUARD — v4.5
+# =========================================================
+def research_key(row: Dict[str, Any]) -> str:
+    return "|".join([
+        str(row.get("sport", row.get("sport_title", ""))),
+        str(row.get("game", "")),
+        str(row.get("market_label", row.get("market", ""))),
+        str(row.get("pick", row.get("pick_label", ""))),
+        str(row.get("start_nz", "")),
+    ])
+
+
+def load_research_checks() -> pd.DataFrame:
+    if "research_checks_v45" not in st.session_state:
+        if RESEARCH_PATH.exists():
+            try:
+                st.session_state.research_checks_v45 = pd.read_csv(RESEARCH_PATH)
+            except Exception:
+                st.session_state.research_checks_v45 = pd.DataFrame()
+        else:
+            st.session_state.research_checks_v45 = pd.DataFrame()
+    return st.session_state.research_checks_v45
+
+
+def save_research_checks(df: pd.DataFrame) -> None:
+    st.session_state.research_checks_v45 = df
+    RESEARCH_PATH.parent.mkdir(exist_ok=True)
+    try:
+        df.to_csv(RESEARCH_PATH, index=False)
+    except Exception:
+        pass
+
+
+def get_research_record(row: Dict[str, Any]) -> Dict[str, Any]:
+    df = load_research_checks()
+    key = research_key(row)
+    if df.empty or "research_key" not in df.columns:
+        return {}
+    match = df[df["research_key"].astype(str) == key]
+    if match.empty:
+        return {}
+    return match.iloc[0].to_dict()
+
+
+def build_auto_research_record(row: Dict[str, Any], rules: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Honest auto-assist record.
+    It can auto-mark obvious non-research items such as indoor weather,
+    but it does not pretend to know injuries, lineups, starters, form, or motivation.
+    """
+    sport_txt = str(row.get("sport", row.get("sport_title", "")) or "").lower()
+    sport_key = str(row.get("sport_key", "") or "").lower()
+    combined = f"{sport_txt} {sport_key}"
+
+    indoor_weather = False
+    if rules.get("auto_clear_indoor_weather", True):
+        indoor_hints = ["nba", "wnba", "nhl", "ncaab", "ncaawb", "basketball", "icehockey", "hockey"]
+        indoor_weather = any(h in combined for h in indoor_hints)
+
+    game_q = quote_plus(f"{row.get('game','')} {row.get('sport','')}")
+    urls = (
+        f"Injuries/news: https://www.google.com/search?q={game_q}+injury+report+lineup\n"
+        f"Weather: https://www.google.com/search?q={game_q}+weather+stadium\n"
+        f"Last 5/form: https://www.google.com/search?q={game_q}+last+5+games+form\n"
+        f"Standings: https://www.google.com/search?q={game_q}+standings+motivation\n"
+        f"Starter/lineup: https://www.google.com/search?q={game_q}+probable+starter+lineup"
+    )
+
+    return {
+        "research_key": research_key(row),
+        "saved_at": iso_z(datetime.now(timezone.utc)),
+        "sport": row.get("sport", ""),
+        "game": row.get("game", ""),
+        "market": row.get("market_label", row.get("market", "")),
+        "pick": row.get("pick", ""),
+        "start_nz": row.get("start_nz", ""),
+        "injury_status": "Unknown",
+        "lineup_status": "Unknown",
+        "weather_status": "Indoor / not relevant" if indoor_weather else "Unknown",
+        "form_status": "Unknown",
+        "standings_status": "Unknown",
+        "travel_status": "Unknown",
+        "public_status": "Unknown",
+        "research_urls": urls,
+        "research_notes": "Auto Research Assist: market data is automatic. Injuries, lineups/starters, form, motivation, fatigue, and public-heavy risk are not automatically verified unless you connect a reliable sports data API or manually check them.",
+        "auto_research_assist": True,
+    }
+
+
+def upsert_research_record(record: Dict[str, Any]) -> None:
+    df = load_research_checks()
+    key = str(record.get("research_key", ""))
+    if not key:
+        return
+    new_row = pd.DataFrame([record])
+    if df.empty or "research_key" not in df.columns:
+        save_research_checks(new_row)
+        return
+    df = df[df["research_key"].astype(str) != key]
+    df = pd.concat([new_row, df], ignore_index=True)
+    save_research_checks(df)
+
+
+def research_verdict_from_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    if not record:
+        return {
+            "research_status": "PENDING — NO RESEARCH CHECK",
+            "research_score": 0,
+            "research_reason": "No injury/lineup/weather/form research has been saved for this pick.",
+            "research_notes": "",
+            "research_urls": "",
+            "research_red_flag": False,
+            "research_clear": False,
+        }
+
+    fields = {
+        "injury_status": "Injury/news",
+        "lineup_status": "Lineup/starters",
+        "weather_status": "Weather",
+        "form_status": "Last 5/form",
+        "standings_status": "Standings/motivation",
+        "travel_status": "Travel/fatigue",
+        "public_status": "Public-heavy",
+    }
+
+    red_flags = []
+    unknowns = []
+    positives = []
+
+    for field, label in fields.items():
+        value = str(record.get(field, "Unknown") or "Unknown")
+        value_lower = value.lower()
+        if "major" in value_lower or "red flag" in value_lower or "scratched" in value_lower or "public-heavy risk" in value_lower or "motivation risk" in value_lower or "fatigue risk" in value_lower or "weak red flag" in value_lower:
+            red_flags.append(f"{label}: {value}")
+        elif "unknown" in value_lower or "not checked" in value_lower:
+            unknowns.append(label)
+        else:
+            positives.append(f"{label}: {value}")
+
+    notes = str(record.get("research_notes", "") or "")
+    urls = str(record.get("research_urls", "") or "")
+
+    if red_flags:
+        return {
+            "research_status": "REJECT — RESEARCH RED FLAG",
+            "research_score": 25,
+            "research_reason": " | ".join(red_flags),
+            "research_notes": notes,
+            "research_urls": urls,
+            "research_red_flag": True,
+            "research_clear": False,
+        }
+
+    if unknowns:
+        return {
+            "research_status": "PENDING — RESEARCH INCOMPLETE",
+            "research_score": 60,
+            "research_reason": "Still unknown/not checked: " + ", ".join(unknowns),
+            "research_notes": notes,
+            "research_urls": urls,
+            "research_red_flag": False,
+            "research_clear": False,
+        }
+
+    return {
+        "research_status": "CLEAR — RESEARCH CHECKED",
+        "research_score": 100,
+        "research_reason": "No research red flags saved. " + (" | ".join(positives[:4]) if positives else "All research fields clear."),
+        "research_notes": notes,
+        "research_urls": urls,
+        "research_red_flag": False,
+        "research_clear": True,
+    }
+
+
+def research_guard_evaluation(row: Dict[str, Any], rules: Dict[str, Any]) -> Dict[str, Any]:
+    record = get_research_record(row)
+    if not record and rules.get("auto_research_mode", True):
+        record = build_auto_research_record(row, rules)
+    verdict = research_verdict_from_record(record)
+
+    if not rules.get("research_guard_mode", True):
+        verdict["research_blocks_log"] = False
+        verdict["research_lock_status"] = "RESEARCH GUARD OFF"
+        verdict["research_lock_reason"] = "Research Guard is turned off."
+        return verdict
+
+    if verdict.get("research_red_flag") and rules.get("reject_research_red_flags", True):
+        verdict["research_blocks_log"] = True
+        verdict["research_lock_status"] = "LOCKED — RESEARCH RED FLAG"
+        verdict["research_lock_reason"] = verdict.get("research_reason", "Research red flag.")
+        return verdict
+
+    if rules.get("require_research_clear_to_log", True) and not verdict.get("research_clear", False):
+        if rules.get("allow_market_only_auto_paper", False) and str(row.get("data_confidence", "")).upper() == "HIGH":
+            verdict["research_blocks_log"] = False
+            verdict["research_lock_status"] = "AUTO MODE — MARKET ONLY"
+            verdict["research_lock_reason"] = "Research is not fully clear, but Market-Only Auto Mode is ON. Use for paper testing only; do not treat this as injury/lineup/weather confirmed."
+            return verdict
+        verdict["research_blocks_log"] = True
+        verdict["research_lock_status"] = "LOCKED — RESEARCH PENDING"
+        verdict["research_lock_reason"] = verdict.get("research_reason", "Research check is not clear yet.")
+        return verdict
+
+    verdict["research_blocks_log"] = False
+    verdict["research_lock_status"] = "RESEARCH CLEAR"
+    verdict["research_lock_reason"] = verdict.get("research_reason", "Research Guard passed.")
+    return verdict
+
+
 # =========================================================
 # ALIGNMENT LOCK — v4.2
 # =========================================================
@@ -1310,6 +1532,16 @@ def log_lock_evaluation(row: Dict[str, Any], rules: Dict[str, Any]) -> Dict[str,
             "paper_log_allowed": False,
             "log_lock_status": "LOCKED — NOT APPROVED",
             "log_lock_reason": f"Decision is {decision}. Only approved/elite candidates can be paper-logged.",
+            "alignment_status_saved": align,
+            "parlay_leg_status_saved": parlay_status,
+        }
+
+    # Research Guard blocks paper-log until injury/lineup/weather/form checks are clear when enabled.
+    if row.get("research_blocks_log"):
+        return {
+            "paper_log_allowed": False,
+            "log_lock_status": row.get("research_lock_status", "LOCKED — RESEARCH GUARD"),
+            "log_lock_reason": row.get("research_lock_reason", "Research Guard blocked paper-log."),
             "alignment_status_saved": align,
             "parlay_leg_status_saved": parlay_status,
         }
@@ -1365,6 +1597,7 @@ def apply_alignment_lock_to_rows(rows: List[Dict[str, Any]], rules: Dict[str, An
     out = []
     for row in rows:
         r = dict(row)
+        r.update(research_guard_evaluation(r, rules))
         lock = log_lock_evaluation(r, rules)
         r.update(lock)
         out.append(r)
@@ -1663,8 +1896,8 @@ def render_public_proof_badge(row: Dict[str, Any]) -> None:
 
 
 def main():
-    st.title("🐐 GOAT Shield Live v4.4.5 LOOSE BOOKS")
-    st.caption("Looser dynamic bookmaker thresholds. Major sports need 8 books, WNBA/MLS 6, college 5, other 4, plus sharp/core support. Paper-only.")
+    st.title("🐐 GOAT Shield Live v4.6 AUTO MODE")
+    st.caption("Auto Mode + Research Guard. Adds automatic market-only paper mode with honest research warnings. Unknown injuries/lineups/weather still show as pending unless manually cleared. Paper-only.")
 
     api_key_default = secret("ODDS_API_KEY", "")
 
@@ -1912,6 +2145,41 @@ def main():
             help="Default OFF. Keep this off unless you only want to test weak watchlist picks on paper.",
         )
 
+        st.markdown("### Research Guard")
+        rules.setdefault("research_guard_mode", True)
+        rules.setdefault("require_research_clear_to_log", True)
+        rules.setdefault("reject_research_red_flags", True)
+        rules.setdefault("auto_research_mode", True)
+        rules.setdefault("auto_clear_indoor_weather", True)
+        rules.setdefault("allow_market_only_auto_paper", False)
+        rules["research_guard_mode"] = st.checkbox(
+            "Research Guard mode",
+            bool(rules.get("research_guard_mode", True)),
+            help="Adds injury, lineup, weather, form, standings, fatigue, and public-risk checks before paper-log.",
+        )
+        rules["auto_research_mode"] = st.checkbox(
+            "Auto Research Assist",
+            bool(rules.get("auto_research_mode", True)),
+            help="Automatically adds honest research status. It can mark obvious indoor-weather/not relevant, but it will not fake injury or lineup knowledge.",
+        )
+        rules["auto_clear_indoor_weather"] = st.checkbox(
+            "Auto-clear indoor weather",
+            bool(rules.get("auto_clear_indoor_weather", True)),
+        )
+        rules["require_research_clear_to_log"] = st.checkbox(
+            "Require research CLEAR before paper-log",
+            bool(rules.get("require_research_clear_to_log", True)),
+        )
+        rules["allow_market_only_auto_paper"] = st.checkbox(
+            "Allow Market-Only Auto paper picks",
+            bool(rules.get("allow_market_only_auto_paper", False)),
+            help="OFF by default. If ON, HIGH-confidence market picks can be paper-logged even when injury/lineup/form research is unknown. Paper only.",
+        )
+        rules["reject_research_red_flags"] = st.checkbox(
+            "Reject research red flags",
+            bool(rules.get("reject_research_red_flags", True)),
+        )
+
         st.markdown("### Manual red flags")
         flags = {
             "injury_red": st.checkbox("Injury/news red flag", False),
@@ -1924,7 +2192,7 @@ def main():
 
     log_df = load_log()
 
-    tabs = st.tabs(["🇳🇿 NZ Bettor Board", "🎯 Picks", "📱 Mobile Cards", "🛡️ Auto Verify", "🔒 Alignment Lock", "🧠 3-Source Alignment", "🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "🛡️ Backup", "ℹ️ Health Check"])
+    tabs = st.tabs(["🇳🇿 NZ Bettor Board", "🎯 Picks", "📱 Mobile Cards", "🛡️ Auto Verify", "🔒 Alignment Lock", "🧠 3-Source Alignment", "🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "🛡️ Backup", "ℹ️ Health Check", "🧠 Research Guard", "🤖 Auto Mode"])
 
     with tabs[0]:
         st.subheader("🇳🇿 NZ Bettor Board")
@@ -2052,7 +2320,7 @@ def main():
                     "market_win_pct", "best_implied_win_pct",
                     "pinnacle", "pinnacle_gap_pct", "pinnacle_status", "sharp_status", "sharp_core_count", "sharp_books", "retail_books_count", "tab_betcha", "bet365",
                     "data_confidence", "data_confidence_score", "data_age", "line_stability",
-                    "log_lock_status", "log_lock_reason", "alignment_status_saved", "parlay_leg_status_saved",
+                    "log_lock_status", "log_lock_reason", "research_status", "research_reason", "alignment_status_saved", "parlay_leg_status_saved",
                     "price_lift_pct", "books", "required_books", "book_threshold_group", "reasons", "data_confidence_reasons", "score_parts", "all_prices",
                 ]
                 st.dataframe(
@@ -2088,7 +2356,7 @@ def main():
                     if not locked_rows.empty:
                         st.warning(f"Alignment Lock blocked {len(locked_rows)} approved/elite candidate(s) from paper-log.")
                         st.dataframe(
-                            locked_rows[["decision", "score", "data_confidence", "data_confidence_score", "pick", "best_odds", "sharp_status", "sharp_books", "books", "required_books", "book_threshold_group", "log_lock_status", "log_lock_reason", "alignment_status_saved"]].style.format({"best_odds": "{:.2f}"}),
+                            locked_rows[["decision", "score", "data_confidence", "data_confidence_score", "pick", "best_odds", "sharp_status", "sharp_books", "books", "required_books", "book_threshold_group", "research_status", "research_reason", "log_lock_status", "log_lock_reason", "alignment_status_saved"]].style.format({"best_odds": "{:.2f}"}),
                             use_container_width=True,
                             hide_index=True,
                         )
@@ -2150,6 +2418,10 @@ def main():
                                 "log_lock_reason": chosen.get("log_lock_reason", ""),
                                 "alignment_status_saved": chosen.get("alignment_status_saved", ""),
                                 "parlay_leg_status_saved": chosen.get("parlay_leg_status_saved", ""),
+                                "research_status": chosen.get("research_status", ""),
+                                "research_reason": chosen.get("research_reason", ""),
+                                "research_notes": chosen.get("research_notes", ""),
+                                "research_urls": chosen.get("research_urls", ""),
                                 "three_source_alignment": proof_summary_text(get_public_proof(chosen)),
                                 "result": "Pending",
                                 "profit_units": "",
@@ -2240,6 +2512,7 @@ def main():
                             "decision", "score", "data_confidence", "data_confidence_score",
                             "sport", "game", "market_label", "pick", "best_odds", "best_bookmaker",
                             "market_win_pct", "pinnacle", "pinnacle_gap_pct", "sharp_status", "sharp_core_count", "sharp_books", "books", "required_books", "book_threshold_group",
+                            "research_status", "research_reason",
                             "time_status", "starts_in", "start_nz", "start_et",
                             "log_lock_status", "log_lock_reason",
                         ]
@@ -2266,6 +2539,7 @@ def main():
                                 st.markdown(f"**Auto Verify:** {row.get('data_confidence', '')} ({row.get('data_confidence_score', '')}/100)")
                                 st.markdown(f"**Sharp/Core:** {row.get('sharp_status', 'Unknown')}")
                                 st.markdown(f"**Book coverage:** {row.get('books', 0)} / required {row.get('required_books', '?')} ({row.get('book_threshold_group', '')})")
+                                st.markdown(f"**Research:** {row.get('research_status', 'PENDING')}")
                                 st.markdown(f"**Time:** {row.get('time_status', '')} • starts in {row.get('starts_in', '')}")
                                 st.caption(f"Lock: {row.get('log_lock_status', '')} — {row.get('log_lock_reason', '')}")
 
@@ -2361,6 +2635,7 @@ def main():
                     "data_confidence", "data_confidence_score", "decision", "score",
                     "sport", "game", "pick", "best_odds", "market_win_pct", "best_implied_win_pct",
                     "pinnacle", "pinnacle_gap_pct", "sharp_status", "sharp_core_count", "sharp_books", "books", "required_books", "book_threshold_group", "data_age", "line_stability",
+                    "research_status", "research_reason",
                     "log_lock_status", "log_lock_reason",
                     "data_confidence_reasons", "data_confidence_passed",
                 ]
@@ -2430,6 +2705,7 @@ def main():
                         "alignment_status_saved", "parlay_leg_status_saved",
                         "sport", "game", "pick", "best_odds", "pinnacle", "pinnacle_gap_pct",
                         "sharp_status", "sharp_core_count", "sharp_books", "books", "required_books", "book_threshold_group",
+                        "research_status", "research_reason",
                         "log_lock_reason",
                     ]
                     st.dataframe(
@@ -2717,7 +2993,7 @@ def main():
         st.subheader("ℹ️ Health Check / About")
         st.write("This page tells you whether the app is running correctly, what each command does, and what to check before trusting any paper pick.")
 
-        app_version = "GOAT Shield Live v4.4.5 LOOSE BOOKS"
+        app_version = "GOAT Shield Live v4.6 AUTO MODE"
         events_health = st.session_state.get("events_v36", [])
         markets_health = st.session_state.get("markets_v36", markets)
         metas_health = st.session_state.get("metas_v36", [])
@@ -2769,6 +3045,8 @@ def main():
         sharp_supported_count = int(health_df["sharp_support"].fillna(False).astype(bool).sum()) if not health_df.empty and "sharp_support" in health_df.columns else 0
         retail_only_count = int(len(health_df) - sharp_supported_count) if not health_df.empty else 0
         below_required_books = int((health_df["books"].fillna(0).astype(float) < health_df["required_books"].fillna(0).astype(float)).sum()) if not health_df.empty and "required_books" in health_df.columns else 0
+        research_clear_count = int(health_df["research_clear"].fillna(False).astype(bool).sum()) if not health_df.empty and "research_clear" in health_df.columns else 0
+        research_pending_count = int(len(health_df) - research_clear_count) if not health_df.empty else 0
 
         def status_text(ok: bool) -> str:
             return "✅ OK" if ok else "❌ CHECK"
@@ -2793,7 +3071,7 @@ def main():
         s1.metric("Sharp-supported candidates", sharp_supported_count)
         s2.metric("Retail-only candidates", retail_only_count)
         s3.metric("Below required books", below_required_books)
-        s4.metric("Dynamic books", "ON" if rules.get("dynamic_book_thresholds", True) else "OFF")
+        s4.metric("Research clear", research_clear_count)
 
         st.markdown("### Data confidence")
         d1, d2, d3, d4, d5 = st.columns(5)
@@ -2819,6 +3097,8 @@ def main():
             verdicts.append(("ℹ️ Some candidates below sport-specific bookmaker threshold", "This is normal. Dynamic threshold is filtering by sport coverage instead of using one fixed number."))
         if fetch_ok and rules.get("require_sharp_support", True) and sharp_supported_count == 0:
             verdicts.append(("⚠️ No sharp/core support found", "Do not paper-log retail-only candidates. Check sport/region coverage or wait for better market depth."))
+        if fetch_ok and rules.get("research_guard_mode", True) and research_pending_count > 0:
+            verdicts.append(("ℹ️ Research checks pending", "Use Research Guard for manual clearance, or Auto Mode for market-only paper shortlisting with visible research warnings."))
         if fetch_ok and lock_counts.get("UNLOCKED", 0) == 0:
             verdicts.append(("ℹ️ No paper-log unlocked picks", "This is not always bad. It means the shield is blocking weak candidates."))
 
@@ -2847,7 +3127,8 @@ def main():
             {"Command / Tab": "✅ Results", "Meaning": "Settle paper picks later as Win/Loss/Push and record closing odds."},
             {"Command / Tab": "📊 Dashboard", "Meaning": "Tracks proof over time: number of picks, ROI, CLV, and system verdict."},
             {"Command / Tab": "🛡️ Backup", "Meaning": "Download or restore your paper-log CSV."},
-            {"Command / Tab": "ℹ️ Health Check", "Meaning": "This page. Checks if app, API, data, confidence, and lock system look healthy."},
+            {"Command / Tab": "ℹ️ Health Check", "Meaning": "This page. Checks if app, API, data, confidence, research, and lock system look healthy."},
+            {"Command / Tab": "🧠 Research Guard", "Meaning": "Manual research layer for injuries, lineups/starters, weather, last-5 form, standings/motivation, travel/fatigue, and public-heavy risk."},
         ]
         st.dataframe(pd.DataFrame(command_rows), use_container_width=True, hide_index=True)
 
@@ -2875,15 +3156,261 @@ def main():
         st.write("2. Pinnacle reference from The Odds API")
         st.write("3. Sharp/core support detection: Pinnacle reference plus returned books/exchanges such as Circa, BookMaker/CRIS, Betfair, Matchbook, or Smarkets when available")
         st.write("4. Dynamic bookmaker threshold: MLB/NBA/NFL/NHL need 8, WNBA/MLS need 6, college need 5, other sports need 4 by default")
-        st.write("5. Internal calculations: implied probability, home favourite, time safety, line movement, data confidence")
+        st.write("5. Research Guard + Auto Mode: injury/news, lineup/starter, weather, last-5 form, standings/motivation, travel/fatigue, public-risk checks, and market-only auto paper mode")
+        st.write("6. Internal calculations: implied probability, home favourite, time safety, line movement, data confidence")
         st.write("Optional/manual sources only:")
         st.write("Sports Alerts, Sports Chat Place, Picks & Parlays")
 
         st.warning("This app is a paper-betting shield, not proof of profit yet. You still need 300 settled paper picks before treating the system as proven.")
 
 
+    with tabs[12]:
+        st.subheader("🧠 Research Guard")
+        st.info("This is the missing sports-research layer: injuries, lineups/starters, weather, last-5 form, standings/motivation, travel/fatigue, and public-heavy risk.")
+
+        events_rg = st.session_state.get("events_v36", [])
+        last_markets_rg = st.session_state.get("markets_v36", markets)
+
+        if not events_rg:
+            st.info("Run Fetch NZ bettor board first, then come here.")
+        else:
+            pinnacle_ref_rg = st.session_state.get("pinnacle_ref_v38", {}) if rules.get("show_pinnacle_reference") else {}
+            candidates_rg = build_candidates(
+                events_rg,
+                last_markets_rg,
+                int(rules["min_minutes_before_start"]),
+                pinnacle_ref_rg,
+                int(rules.get("post_start_grace_minutes", 5)),
+            )
+
+            rows_rg = []
+            app_count_rg = approved_today_count(log_df)
+            streak_rg = loss_streak_count(log_df)
+
+            for cand in candidates_rg:
+                decision, score, bucket, reason, plain, action, score_parts = decide(cand, rules, flags, app_count_rg, streak_rg)
+                rr = dict(cand)
+                rr.update({
+                    "decision": decision,
+                    "score": score,
+                    "reject_bucket": bucket,
+                    "reasons": reason,
+                    "plain_explanation": plain,
+                    "action": action,
+                    "score_parts": score_parts,
+                })
+                rows_rg.append(rr)
+
+            rows_rg = apply_auto_verify_to_rows(rows_rg, rules, update_snapshot=False)
+            rows_rg = apply_alignment_lock_to_rows(rows_rg, rules)
+            rg_df = pd.DataFrame(rows_rg)
+
+            if rg_df.empty:
+                st.warning("No candidates available for research.")
+            else:
+                rg_df["rg_sort"] = rg_df["decision"].astype(str).apply(lambda x: 0 if "ELITE" in x else (1 if "APPROVED" in x else (2 if "WATCHLIST" in x else 3)))
+                rg_df = rg_df.sort_values(["rg_sort", "score", "data_confidence_score"], ascending=[True, False, False]).reset_index(drop=True)
+
+                labels = rg_df.apply(
+                    lambda x: f"{x.name}: {x.get('decision','')} — {x.get('pick','')} @ {x.get('best_odds','')} — {x.get('game','')} — {x.get('start_nz','')}",
+                    axis=1
+                ).tolist()
+
+                choice = st.selectbox("Pick to research-check", labels)
+                idx_rg = int(choice.split(":")[0])
+                selected = rg_df.loc[idx_rg].to_dict()
+                key_rg = research_key(selected)
+                saved = get_research_record(selected)
+
+                st.markdown("### Candidate")
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Pick", str(selected.get("pick", "")))
+                c2.metric("Odds", f"{safe_float(selected.get('best_odds', 0), 0):.2f}")
+                c3.metric("Auto Verify", f"{selected.get('data_confidence', '')} {selected.get('data_confidence_score', '')}/100")
+                c4.metric("Current lock", str(selected.get("log_lock_status", ""))[:28])
+
+                st.write(f"**Game:** {selected.get('game','')}")
+                st.write(f"**Sport:** {selected.get('sport','')} | **Market:** {selected.get('market_label','')}")
+                st.write(f"**Start:** {selected.get('start_nz','')} / {selected.get('start_et','')}")
+
+                q_base = quote_plus(f"{selected.get('game','')} {selected.get('sport','')}")
+                st.markdown("### Quick research links")
+                st.markdown(
+                    f"[Injuries/news](https://www.google.com/search?q={q_base}+injury+report+lineup) | "
+                    f"[Weather](https://www.google.com/search?q={q_base}+weather+stadium) | "
+                    f"[Last 5/form](https://www.google.com/search?q={q_base}+last+5+games+form) | "
+                    f"[Standings](https://www.google.com/search?q={q_base}+standings+motivation) | "
+                    f"[Starting pitcher/QB/goalie](https://www.google.com/search?q={q_base}+probable+starter+lineup)"
+                )
+
+                with st.expander("🤖 Auto Research Assist"):
+                    st.write("This can auto-fill the safe parts. It will not pretend injuries, lineups, starters, form, or motivation are known.")
+                    auto_preview = build_auto_research_record(selected, rules)
+                    st.json({k: auto_preview.get(k) for k in ["injury_status", "lineup_status", "weather_status", "form_status", "standings_status", "travel_status", "public_status"]})
+                    if st.button("Save Auto Research Assist for this pick"):
+                        upsert_research_record(auto_preview)
+                        st.success("Auto Research Assist saved. Unknown critical research remains pending unless Market-Only Auto Mode is ON or you manually clear it.")
+                        st.rerun()
+
+                def previous(field: str, default: str = "Unknown") -> str:
+                    return str(saved.get(field, default) if saved else default)
+
+                st.markdown("### Research checklist")
+                injury_status = st.selectbox("Injury/news", ["Unknown", "Clear", "Minor risk", "Major red flag"], index=["Unknown", "Clear", "Minor risk", "Major red flag"].index(previous("injury_status") if previous("injury_status") in ["Unknown", "Clear", "Minor risk", "Major red flag"] else "Unknown"))
+                lineup_status = st.selectbox("Lineup / starter / pitcher / QB / goalie", ["Unknown", "Confirmed / not relevant", "Minor uncertainty", "Scratched / major red flag"], index=["Unknown", "Confirmed / not relevant", "Minor uncertainty", "Scratched / major red flag"].index(previous("lineup_status") if previous("lineup_status") in ["Unknown", "Confirmed / not relevant", "Minor uncertainty", "Scratched / major red flag"] else "Unknown"))
+                weather_status = st.selectbox("Weather", ["Unknown", "Indoor / not relevant", "Clear", "Minor risk", "Major red flag"], index=["Unknown", "Indoor / not relevant", "Clear", "Minor risk", "Major red flag"].index(previous("weather_status") if previous("weather_status") in ["Unknown", "Indoor / not relevant", "Clear", "Minor risk", "Major red flag"] else "Unknown"))
+                form_status = st.selectbox("Last 5 / recent form", ["Unknown", "Strong / positive", "Neutral", "Weak red flag"], index=["Unknown", "Strong / positive", "Neutral", "Weak red flag"].index(previous("form_status") if previous("form_status") in ["Unknown", "Strong / positive", "Neutral", "Weak red flag"] else "Unknown"))
+                standings_status = st.selectbox("Standings / motivation", ["Unknown", "Motivation positive", "Neutral", "Motivation risk"], index=["Unknown", "Motivation positive", "Neutral", "Motivation risk"].index(previous("standings_status") if previous("standings_status") in ["Unknown", "Motivation positive", "Neutral", "Motivation risk"] else "Unknown"))
+                travel_status = st.selectbox("Travel / fatigue / schedule", ["Unknown", "Clear", "Minor fatigue", "Fatigue risk"], index=["Unknown", "Clear", "Minor fatigue", "Fatigue risk"].index(previous("travel_status") if previous("travel_status") in ["Unknown", "Clear", "Minor fatigue", "Fatigue risk"] else "Unknown"))
+                public_status = st.selectbox("Public-heavy risk", ["Unknown", "Not public-heavy", "Public-heavy risk"], index=["Unknown", "Not public-heavy", "Public-heavy risk"].index(previous("public_status") if previous("public_status") in ["Unknown", "Not public-heavy", "Public-heavy risk"] else "Unknown"))
+
+                research_urls = st.text_area("Source URLs / proof links", value=previous("research_urls", ""))
+                research_notes = st.text_area("Research notes", value=previous("research_notes", ""))
+
+                record_preview = {
+                    "research_key": key_rg,
+                    "saved_at": iso_z(datetime.now(timezone.utc)),
+                    "sport": selected.get("sport", ""),
+                    "game": selected.get("game", ""),
+                    "market": selected.get("market_label", selected.get("market", "")),
+                    "pick": selected.get("pick", ""),
+                    "start_nz": selected.get("start_nz", ""),
+                    "injury_status": injury_status,
+                    "lineup_status": lineup_status,
+                    "weather_status": weather_status,
+                    "form_status": form_status,
+                    "standings_status": standings_status,
+                    "travel_status": travel_status,
+                    "public_status": public_status,
+                    "research_urls": research_urls,
+                    "research_notes": research_notes,
+                }
+
+                preview_verdict = research_verdict_from_record(record_preview)
+                st.markdown("### Research verdict preview")
+                if preview_verdict["research_status"].startswith("CLEAR"):
+                    st.success(f"{preview_verdict['research_status']} — {preview_verdict['research_reason']}")
+                elif preview_verdict["research_status"].startswith("REJECT"):
+                    st.error(f"{preview_verdict['research_status']} — {preview_verdict['research_reason']}")
+                else:
+                    st.warning(f"{preview_verdict['research_status']} — {preview_verdict['research_reason']}")
+
+                if st.button("Save Research Check"):
+                    upsert_research_record(record_preview)
+                    st.success("Research check saved. Re-open Picks/Alignment Lock to apply the saved research status.")
+                    st.rerun()
+
+                st.markdown("### Saved research checks")
+                saved_df = load_research_checks()
+                if saved_df.empty:
+                    st.info("No saved research checks yet.")
+                else:
+                    show_cols = [c for c in ["saved_at", "sport", "game", "pick", "injury_status", "lineup_status", "weather_status", "form_status", "standings_status", "travel_status", "public_status", "research_notes"] if c in saved_df.columns]
+                    st.dataframe(saved_df[show_cols], use_container_width=True, hide_index=True)
+
+
+    with tabs[13]:
+        st.subheader("🤖 Auto Mode")
+        st.warning("Paper-only automatic mode. This does not place bets. It does not guarantee profit. It is a way to automatically shortlist market-clean paper picks.")
+        st.info("Full sports research cannot be truly automatic without reliable injury/lineup/stats/weather APIs. This tab is honest: unknown research stays visible.")
+
+        if not rules.get("allow_market_only_auto_paper", False):
+            st.warning("Market-Only Auto paper picks are OFF. Turn ON 'Allow Market-Only Auto paper picks' in the sidebar if you want fully automatic paper shortlisting without manual research clearance.")
+        else:
+            st.success("Market-Only Auto paper picks are ON. HIGH-confidence market picks can pass even if research is unknown. Paper testing only.")
+
+        events_auto = st.session_state.get("events_v36", [])
+        last_markets_auto = st.session_state.get("markets_v36", markets)
+
+        if not events_auto:
+            st.info("Run Fetch NZ bettor board first, then come here.")
+        else:
+            pinnacle_ref_auto = st.session_state.get("pinnacle_ref_v38", {}) if rules.get("show_pinnacle_reference") else {}
+            candidates_auto = build_candidates(
+                events_auto,
+                last_markets_auto,
+                int(rules["min_minutes_before_start"]),
+                pinnacle_ref_auto,
+                int(rules.get("post_start_grace_minutes", 5)),
+            )
+
+            rows_auto = []
+            app_count_auto = approved_today_count(log_df)
+            streak_auto = loss_streak_count(log_df)
+
+            for cand in candidates_auto:
+                decision, score, bucket, reason, plain, action, score_parts = decide(cand, rules, flags, app_count_auto, streak_auto)
+                rr = dict(cand)
+                rr.update({
+                    "decision": decision,
+                    "score": score,
+                    "reject_bucket": bucket,
+                    "reasons": reason,
+                    "plain_explanation": plain,
+                    "action": action,
+                    "score_parts": score_parts,
+                })
+                rows_auto.append(rr)
+
+            rows_auto = apply_auto_verify_to_rows(rows_auto, rules, update_snapshot=False)
+            rows_auto = apply_alignment_lock_to_rows(rows_auto, rules)
+            auto_df = pd.DataFrame(rows_auto)
+
+            if auto_df.empty:
+                st.warning("No auto candidates found.")
+            else:
+                min_odds = float(rules.get("min_decimal_odds", 1.40))
+                max_odds = float(rules.get("max_decimal_odds", 1.90))
+                auto_df["is_final_auto"] = (
+                    auto_df["decision"].astype(str).str.contains("APPROVED|ELITE", regex=True, na=False)
+                    & auto_df["paper_log_allowed"].fillna(False).astype(bool)
+                    & (auto_df["best_odds"].astype(float) >= min_odds)
+                    & (auto_df["best_odds"].astype(float) <= max_odds)
+                )
+                if rules.get("picks_mode_high_conf_only", True):
+                    auto_df["is_final_auto"] = auto_df["is_final_auto"] & (auto_df["data_confidence"].astype(str).str.upper() == "HIGH")
+
+                final_auto = auto_df[auto_df["is_final_auto"]].copy()
+                pending_research = int(auto_df["research_status"].astype(str).str.contains("PENDING", na=False).sum()) if "research_status" in auto_df.columns else 0
+                market_only = int(auto_df["research_lock_status"].astype(str).str.contains("AUTO MODE", na=False).sum()) if "research_lock_status" in auto_df.columns else 0
+
+                a1, a2, a3, a4 = st.columns(4)
+                a1.metric("Auto final paper picks", len(final_auto))
+                a2.metric("Research pending", pending_research)
+                a3.metric("Market-only unlocked", market_only)
+                a4.metric("Daily limit", int(rules.get("max_daily", 3)))
+
+                if final_auto.empty:
+                    st.error("No automatic final paper picks right now. The shield is blocking or research is still pending.")
+                else:
+                    st.success("Automatic paper shortlist created. Use max daily limit and paper-log only.")
+                    final_auto = final_auto.sort_values(["score", "data_confidence_score", "start_nz"], ascending=[False, False, True]).reset_index(drop=True)
+                    show_cols = [c for c in [
+                        "decision", "score", "data_confidence", "data_confidence_score",
+                        "sport", "game", "market_label", "pick", "best_odds", "best_bookmaker",
+                        "sharp_status", "sharp_core_count", "books", "required_books",
+                        "research_status", "research_reason", "research_lock_status",
+                        "log_lock_status", "log_lock_reason", "start_nz"
+                    ] if c in final_auto.columns]
+                    st.dataframe(final_auto[show_cols], use_container_width=True, hide_index=True)
+
+                    st.markdown("### Auto cards")
+                    for i in range(min(len(final_auto), int(rules.get("max_daily", 3)))):
+                        row = final_auto.iloc[i].to_dict()
+                        with st.container(border=True):
+                            st.markdown(f"### {i+1}. {row.get('pick', '')} @ {safe_float(row.get('best_odds', 0), 0):.2f}")
+                            st.markdown(f"**Game:** {row.get('game', '')}")
+                            st.markdown(f"**Auto Verify:** {row.get('data_confidence', '')} ({row.get('data_confidence_score', '')}/100)")
+                            st.markdown(f"**Research:** {row.get('research_status', '')}")
+                            st.markdown(f"**Lock:** {row.get('log_lock_status', '')}")
+                            st.caption(str(row.get("log_lock_reason", "")))
+
+                st.divider()
+                st.caption("Honest rule: Full automatic sports research needs proper APIs. Until then, Auto Mode is market-based plus visible research warnings.")
+
+
     st.divider()
-    st.caption("GOAT Shield Live v4.4.5 LOOSE BOOKS is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v4.6 AUTO MODE is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":
