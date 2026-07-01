@@ -1,31 +1,38 @@
-# GOAT Shield Live v4.6 — Auto Mode
+# GOAT Shield Live v4.7 — CLV Proof Tracker
 
-This version adds automatic paper shortlisting while keeping Research Guard honest.
+This version adds the real proof layer.
 
 ## New tab
 
-- 🤖 Auto Mode
+- 📈 CLV Tracker
 
-## New settings
+## Upgraded tabs
 
-- Auto Research Assist
-- Auto-clear indoor weather
-- Allow Market-Only Auto paper picks
+- ✅ Results + CLV Save
+- 📊 Dashboard — Proof Lab
+- 🤖 Auto Mode now supports paper-log from Auto Mode
 
-## Important
+## What CLV means
 
-Full sports research cannot be safely automatic unless you connect reliable data APIs for injuries, lineups, starters, stats, standings, weather, and news.
+CLV = Closing Line Value.
 
-This version does not fake that data.
+For decimal odds:
+- If you log 1.79 and the market closes 1.70, you beat the closing line.
+- That is positive CLV.
+- Positive CLV over many paper picks is stronger proof than a few lucky wins.
 
-By default:
-- Research Guard still blocks unknown research.
-- Auto Mode shows what is market-clean.
-- Market-Only Auto paper picks are OFF.
+## Tracks
 
-If you turn ON Market-Only Auto paper picks:
-- HIGH-confidence market picks can pass even when research is unknown.
-- The app labels this clearly as market-only.
-- Paper testing only.
+- Entry odds
+- Logged implied probability
+- Closing odds
+- Closing implied probability
+- CLV %
+- CLV edge in implied-probability percentage points
+- Result
+- Profit units
+- Source mode
+- Proof bucket
+- Performance by sport, market, confidence, research status, sharp status, and Auto Mode vs Research Clear
 
-No real-money betting. No guarantee of winning.
+Paper-only. No guarantee of winning.

@@ -183,7 +183,7 @@ def resolved_required_books(c: Dict[str, Any], rules: Dict[str, Any]) -> Tuple[i
 # STREAMLIT PAGE
 # =========================================================
 st.set_page_config(
-    page_title="GOAT Shield Live v4.6 AUTO MODE",
+    page_title="GOAT Shield Live v4.7 CLV PROOF TRACKER",
     page_icon="🐐",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -1612,6 +1612,197 @@ def alignment_lock_summary(board: pd.DataFrame) -> Dict[str, int]:
 
 
 # =========================================================
+# CLV / PROOF TRACKER — v4.7
+# =========================================================
+def decimal_implied_pct(odds: Any) -> float:
+    o = safe_float(odds, 0)
+    if o <= 0:
+        return 0.0
+    return 100.0 / o
+
+
+def clv_metrics(entry_odds: Any, closing_odds: Any) -> Dict[str, Any]:
+    entry = safe_float(entry_odds, 0)
+    close = safe_float(closing_odds, 0)
+    if entry <= 0 or close <= 0:
+        return {
+            "closing_odds": closing_odds if closing_odds not in (None, "") else "",
+            "logged_implied_pct": decimal_implied_pct(entry),
+            "closing_implied_pct": "",
+            "clv": "",
+            "clv_pct": "",
+            "clv_edge_pp": "",
+            "clv_status": "PENDING",
+        }
+
+    clv = (entry - close) / close
+    clv_pct = clv * 100.0
+    logged_imp = decimal_implied_pct(entry)
+    closing_imp = decimal_implied_pct(close)
+    edge_pp = closing_imp - logged_imp
+
+    if clv_pct > 0.25:
+        status = "POSITIVE CLV"
+    elif clv_pct < -0.25:
+        status = "NEGATIVE CLV"
+    else:
+        status = "FLAT CLV"
+
+    return {
+        "closing_odds": close,
+        "logged_implied_pct": logged_imp,
+        "closing_implied_pct": closing_imp,
+        "clv": clv,
+        "clv_pct": clv_pct,
+        "clv_edge_pp": edge_pp,
+        "clv_status": status,
+    }
+
+
+def ensure_log_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or not isinstance(df, pd.DataFrame):
+        df = pd.DataFrame()
+    defaults = {
+        "result": "Pending",
+        "profit_units": "",
+        "closing_odds": "",
+        "closing_price_movement": "",
+        "clv": "",
+        "clv_pct": "",
+        "clv_edge_pp": "",
+        "clv_status": "PENDING",
+        "entry_odds": "",
+        "logged_implied_pct": "",
+        "closing_implied_pct": "",
+        "settled_at": "",
+        "closing_source": "",
+        "result_notes": "",
+        "source_mode": "",
+        "proof_bucket": "",
+    }
+    for col, default in defaults.items():
+        if col not in df.columns:
+            df[col] = default
+    if "best_odds" in df.columns:
+        blank_entry = df["entry_odds"].astype(str).isin(["", "nan", "None"])
+        df.loc[blank_entry, "entry_odds"] = df.loc[blank_entry, "best_odds"]
+    if "entry_odds" in df.columns:
+        df["logged_implied_pct"] = pd.to_numeric(df["entry_odds"], errors="coerce").apply(decimal_implied_pct)
+    return df
+
+
+def profit_units_for_result(result: str, entry_odds: Any) -> float:
+    odds = safe_float(entry_odds, 0)
+    if result == "Won":
+        return max(odds - 1.0, 0.0)
+    if result == "Lost":
+        return -1.0
+    return 0.0
+
+
+def apply_clv_to_row(df: pd.DataFrame, idx: Any, closing_odds: Any) -> pd.DataFrame:
+    entry = df.loc[idx].get("entry_odds", df.loc[idx].get("best_odds", 0))
+    metrics = clv_metrics(entry, closing_odds)
+    for k, v in metrics.items():
+        df.loc[idx, k] = v
+    if safe_float(closing_odds, 0) > 0 and safe_float(entry, 0) > 0:
+        df.loc[idx, "closing_price_movement"] = safe_float(closing_odds, 0) - safe_float(entry, 0)
+    return df
+
+
+def duplicate_paper_pick(df: pd.DataFrame, log_row: Dict[str, Any]) -> bool:
+    if df.empty:
+        return False
+    needed = ["game", "pick_label", "start_nz"]
+    for col in needed:
+        if col not in df.columns:
+            return False
+    mask = (
+        df["game"].astype(str).eq(str(log_row.get("game", ""))) &
+        df["pick_label"].astype(str).eq(str(log_row.get("pick_label", ""))) &
+        df["start_nz"].astype(str).eq(str(log_row.get("start_nz", "")))
+    )
+    return bool(mask.any())
+
+
+def make_log_row(chosen: Dict[str, Any], source_mode: str = "Manual Board") -> Dict[str, Any]:
+    entry_odds = safe_float(chosen.get("best_odds", ""), 0)
+    source_text = str(source_mode or "")
+    if "Auto" in source_text and "Market" in source_text:
+        proof_bucket = "AUTO MARKET ONLY"
+    elif str(chosen.get("research_status", "")).startswith("CLEAR"):
+        proof_bucket = "RESEARCH CLEAR"
+    else:
+        proof_bucket = "MANUAL / BOARD"
+
+    return {
+        "created_at": iso_z(datetime.now(timezone.utc)),
+        "nz_date": chosen.get("nz_date", ""),
+        "us_et_date": chosen.get("us_et_date", ""),
+        "start_nz": chosen.get("start_nz", ""),
+        "start_et": chosen.get("start_et", ""),
+        "starts_in": chosen.get("starts_in", ""),
+        "sport": chosen.get("sport", ""),
+        "game": chosen.get("game", ""),
+        "market": chosen.get("market_label", chosen.get("market", "")),
+        "pick_label": chosen.get("pick", chosen.get("pick_label", "")),
+        "best_odds": chosen.get("best_odds", ""),
+        "entry_odds": entry_odds,
+        "logged_implied_pct": decimal_implied_pct(entry_odds),
+        "best_bookmaker": chosen.get("best_bookmaker", ""),
+        "avg_odds": chosen.get("avg_odds", ""),
+        "pinnacle": chosen.get("pinnacle", ""),
+        "pinnacle_gap_pct": chosen.get("pinnacle_gap_pct", ""),
+        "pinnacle_status": chosen.get("pinnacle_status", ""),
+        "sharp_status": chosen.get("sharp_status", ""),
+        "sharp_core_count": chosen.get("sharp_core_count", ""),
+        "sharp_books": chosen.get("sharp_books", ""),
+        "retail_books_count": chosen.get("retail_books_count", ""),
+        "books": chosen.get("books", ""),
+        "required_books": chosen.get("required_books", ""),
+        "book_threshold_group": chosen.get("book_threshold_group", ""),
+        "tab_betcha": chosen.get("tab_betcha", ""),
+        "bet365": chosen.get("bet365", ""),
+        "price_lift_pct": chosen.get("price_lift_pct", ""),
+        "decision": chosen.get("decision", ""),
+        "score": chosen.get("score", ""),
+        "plain_explanation": chosen.get("plain_explanation", ""),
+        "score_parts": chosen.get("score_parts", ""),
+        "data_confidence": chosen.get("data_confidence", ""),
+        "data_confidence_score": chosen.get("data_confidence_score", ""),
+        "data_confidence_reasons": chosen.get("data_confidence_reasons", ""),
+        "market_win_pct": chosen.get("market_win_pct", ""),
+        "best_implied_win_pct": chosen.get("best_implied_win_pct", ""),
+        "line_stability": chosen.get("line_stability", ""),
+        "data_age": chosen.get("data_age", ""),
+        "log_lock_status": chosen.get("log_lock_status", ""),
+        "log_lock_reason": chosen.get("log_lock_reason", ""),
+        "alignment_status_saved": chosen.get("alignment_status_saved", ""),
+        "parlay_leg_status_saved": chosen.get("parlay_leg_status_saved", ""),
+        "research_status": chosen.get("research_status", ""),
+        "research_reason": chosen.get("research_reason", ""),
+        "research_notes": chosen.get("research_notes", ""),
+        "research_urls": chosen.get("research_urls", ""),
+        "source_mode": source_mode,
+        "proof_bucket": proof_bucket,
+        "three_source_alignment": proof_summary_text(get_public_proof(chosen)) if "proof_summary_text" in globals() else "",
+        "result": "Pending",
+        "profit_units": "",
+        "closing_odds": "",
+        "closing_implied_pct": "",
+        "closing_price_movement": "",
+        "clv": "",
+        "clv_pct": "",
+        "clv_edge_pp": "",
+        "clv_status": "PENDING",
+        "settled_at": "",
+        "closing_source": "",
+        "result_notes": "",
+        "all_prices": chosen.get("all_prices", ""),
+    }
+
+
+# =========================================================
 # PAPER LOG
 # =========================================================
 def load_log():
@@ -1623,6 +1814,7 @@ def load_log():
                 st.session_state.paper_log_v36 = pd.DataFrame()
         else:
             st.session_state.paper_log_v36 = pd.DataFrame()
+    st.session_state.paper_log_v36 = ensure_log_columns(st.session_state.paper_log_v36)
     return st.session_state.paper_log_v36
 
 
@@ -1896,8 +2088,8 @@ def render_public_proof_badge(row: Dict[str, Any]) -> None:
 
 
 def main():
-    st.title("🐐 GOAT Shield Live v4.6 AUTO MODE")
-    st.caption("Auto Mode + Research Guard. Adds automatic market-only paper mode with honest research warnings. Unknown injuries/lineups/weather still show as pending unless manually cleared. Paper-only.")
+    st.title("🐐 GOAT Shield Live v4.7 CLV PROOF TRACKER")
+    st.caption("CLV Proof Tracker + Auto Mode. Tracks closing line value, result units, proof progress, and performance by source, sport, market, confidence, and research status. Paper-only.")
 
     api_key_default = secret("ODDS_API_KEY", "")
 
@@ -2192,7 +2384,7 @@ def main():
 
     log_df = load_log()
 
-    tabs = st.tabs(["🇳🇿 NZ Bettor Board", "🎯 Picks", "📱 Mobile Cards", "🛡️ Auto Verify", "🔒 Alignment Lock", "🧠 3-Source Alignment", "🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "🛡️ Backup", "ℹ️ Health Check", "🧠 Research Guard", "🤖 Auto Mode"])
+    tabs = st.tabs(["🇳🇿 NZ Bettor Board", "🎯 Picks", "📱 Mobile Cards", "🛡️ Auto Verify", "🔒 Alignment Lock", "🧠 3-Source Alignment", "🟢 Best Price Board", "📒 Paper Log", "✅ Results", "📊 Dashboard", "📈 CLV Tracker", "🛡️ Backup", "ℹ️ Health Check", "🧠 Research Guard", "🤖 Auto Mode"])
 
     with tabs[0]:
         st.subheader("🇳🇿 NZ Bettor Board")
@@ -2376,59 +2568,7 @@ def main():
 
                         if st.button("Log selected as PAPER pick"):
                             chosen = board.loc[idx].to_dict()
-                            log_row = {
-                                "created_at": iso_z(datetime.now(timezone.utc)),
-                                "nz_date": chosen.get("nz_date", ""),
-                                "us_et_date": chosen.get("us_et_date", ""),
-                                "start_nz": chosen.get("start_nz", ""),
-                                "start_et": chosen.get("start_et", ""),
-                                "starts_in": chosen.get("starts_in", ""),
-                                "sport": chosen.get("sport", ""),
-                                "game": chosen.get("game", ""),
-                                "market": chosen.get("market_label", ""),
-                                "pick_label": chosen.get("pick", ""),
-                                "best_odds": chosen.get("best_odds", ""),
-                                "best_bookmaker": chosen.get("best_bookmaker", ""),
-                                "avg_odds": chosen.get("avg_odds", ""),
-                                "pinnacle": chosen.get("pinnacle", ""),
-                                "pinnacle_gap_pct": chosen.get("pinnacle_gap_pct", ""),
-                                "pinnacle_status": chosen.get("pinnacle_status", ""),
-                                "sharp_status": chosen.get("sharp_status", ""),
-                                "sharp_core_count": chosen.get("sharp_core_count", ""),
-                                "sharp_books": chosen.get("sharp_books", ""),
-                                "retail_books_count": chosen.get("retail_books_count", ""),
-                                "books": chosen.get("books", ""),
-                                "required_books": chosen.get("required_books", ""),
-                                "book_threshold_group": chosen.get("book_threshold_group", ""),
-                                "tab_betcha": chosen.get("tab_betcha", ""),
-                                "bet365": chosen.get("bet365", ""),
-                                "price_lift_pct": chosen.get("price_lift_pct", ""),
-                                "decision": chosen.get("decision", ""),
-                                "score": chosen.get("score", ""),
-                                "plain_explanation": chosen.get("plain_explanation", ""),
-                                "score_parts": chosen.get("score_parts", ""),
-                                "data_confidence": chosen.get("data_confidence", ""),
-                                "data_confidence_score": chosen.get("data_confidence_score", ""),
-                                "data_confidence_reasons": chosen.get("data_confidence_reasons", ""),
-                                "market_win_pct": chosen.get("market_win_pct", ""),
-                                "best_implied_win_pct": chosen.get("best_implied_win_pct", ""),
-                                "line_stability": chosen.get("line_stability", ""),
-                                "data_age": chosen.get("data_age", ""),
-                                "log_lock_status": chosen.get("log_lock_status", ""),
-                                "log_lock_reason": chosen.get("log_lock_reason", ""),
-                                "alignment_status_saved": chosen.get("alignment_status_saved", ""),
-                                "parlay_leg_status_saved": chosen.get("parlay_leg_status_saved", ""),
-                                "research_status": chosen.get("research_status", ""),
-                                "research_reason": chosen.get("research_reason", ""),
-                                "research_notes": chosen.get("research_notes", ""),
-                                "research_urls": chosen.get("research_urls", ""),
-                                "three_source_alignment": proof_summary_text(get_public_proof(chosen)),
-                                "result": "Pending",
-                                "profit_units": "",
-                                "closing_odds": "",
-                                "closing_price_movement": "",
-                                "all_prices": chosen.get("all_prices", ""),
-                            }
+                            log_row = make_log_row(chosen, "Manual Board")
                             new_df = pd.concat([pd.DataFrame([log_row]), log_df], ignore_index=True)
                             save_log(new_df)
                             st.success("Logged as paper pick only.")
@@ -2922,58 +3062,210 @@ def main():
             st.download_button("Download CSV", df.to_csv(index=False).encode("utf-8"), "goat_shield_paper_log.csv", "text/csv")
 
     with tabs[8]:
-        st.subheader("✅ Results")
-        df = load_log()
-        if df.empty or "result" not in df.columns:
-            st.info("No pending picks.")
-        else:
-            pending = df[df["result"].astype(str).eq("Pending")]
-            if pending.empty:
-                st.info("No pending picks.")
-            else:
-                labels = pending.apply(lambda r: f"{r.name}: {r.get('pick_label','Pick')} @ {r.get('best_odds','')} — {r.get('start_nz','')}", axis=1).tolist()
-                selected = st.selectbox("Select pick", labels)
-                idx = int(selected.split(":")[0])
-                result = st.selectbox("Result", ["Won", "Lost", "Push"])
-                closing = st.number_input("Closing odds if known", min_value=0.0, value=0.0, step=0.01)
-                if st.button("Save result"):
-                    odds = safe_float(df.loc[idx].get("best_odds", 0), 0)
-                    df.loc[idx, "result"] = result
-                    df.loc[idx, "profit_units"] = odds - 1 if result == "Won" else (-1 if result == "Lost" else 0)
-                    if closing > 0:
-                        df.loc[idx, "closing_odds"] = closing
-                        df.loc[idx, "clv"] = (odds - closing) / closing
-                    save_log(df)
-                    st.success("Saved.")
-                    st.rerun()
+        st.subheader("✅ Results + CLV Save")
+        st.info("Save the result and the closing odds here. CLV tells whether your paper pick beat the closing market.")
 
-    with tabs[9]:
-        st.subheader("📊 Dashboard")
         df = load_log()
+        df = ensure_log_columns(df)
+
         if df.empty:
             st.info("No paper picks logged yet.")
         else:
-            settled = df[df["result"].isin(["Won", "Lost", "Push"])] if "result" in df.columns else pd.DataFrame()
-            pending = df[df["result"].astype(str).eq("Pending")] if "result" in df.columns else pd.DataFrame()
-            profit = pd.to_numeric(settled.get("profit_units", pd.Series(dtype=float)), errors="coerce").fillna(0).sum() if not settled.empty else 0
-            roi = profit / max(len(settled), 1)
-            clv = pd.to_numeric(settled.get("clv", pd.Series(dtype=float)), errors="coerce").dropna() if not settled.empty else pd.Series(dtype=float)
+            pending = df[df["result"].astype(str).fillna("Pending").eq("Pending")]
+            settled = df[df["result"].astype(str).isin(["Won", "Lost", "Push"])]
 
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Settled", len(settled))
-            c2.metric("Pending", len(pending))
-            c3.metric("Profit units", f"{profit:+.2f}u")
-            c4.metric("ROI", f"{roi*100:.1f}%")
+            r1, r2, r3 = st.columns(3)
+            r1.metric("Pending", len(pending))
+            r2.metric("Settled", len(settled))
+            r3.metric("Need closing odds", int((pd.to_numeric(df["closing_odds"], errors="coerce").fillna(0) <= 0).sum()))
+
+            if pending.empty:
+                st.success("No pending picks.")
+            else:
+                labels = pending.apply(
+                    lambda r: f"{r.name}: {r.get('pick_label','Pick')} @ {r.get('entry_odds', r.get('best_odds',''))} — {r.get('game','')} — {r.get('start_nz','')}",
+                    axis=1
+                ).tolist()
+                selected = st.selectbox("Select pending paper pick", labels)
+                idx = int(selected.split(":")[0])
+
+                entry_odds = safe_float(df.loc[idx].get("entry_odds", df.loc[idx].get("best_odds", 0)), 0)
+                existing_close = safe_float(df.loc[idx].get("closing_odds", 0), 0)
+
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Entry odds", f"{entry_odds:.2f}" if entry_odds else "—")
+                c2.metric("Entry implied", f"{decimal_implied_pct(entry_odds):.2f}%" if entry_odds else "—")
+                c3.metric("Current CLV status", str(df.loc[idx].get("clv_status", "PENDING")))
+
+                result = st.selectbox("Result", ["Won", "Lost", "Push"])
+                closing = st.number_input("Closing decimal odds", min_value=0.0, value=float(existing_close), step=0.01)
+                closing_source = st.text_input("Closing odds source/book", value=str(df.loc[idx].get("closing_source", "") or ""))
+                result_notes = st.text_area("Result / closing notes", value=str(df.loc[idx].get("result_notes", "") or ""))
+
+                if closing > 0:
+                    preview = clv_metrics(entry_odds, closing)
+                    if preview["clv_status"] == "POSITIVE CLV":
+                        st.success(f"CLV preview: {preview['clv_status']} | {preview['clv_pct']:+.2f}% | implied edge {preview['clv_edge_pp']:+.2f}pp")
+                    elif preview["clv_status"] == "NEGATIVE CLV":
+                        st.error(f"CLV preview: {preview['clv_status']} | {preview['clv_pct']:+.2f}% | implied edge {preview['clv_edge_pp']:+.2f}pp")
+                    else:
+                        st.warning(f"CLV preview: {preview['clv_status']} | {preview['clv_pct']:+.2f}% | implied edge {preview['clv_edge_pp']:+.2f}pp")
+
+                col_save1, col_save2 = st.columns(2)
+                with col_save1:
+                    if st.button("Save closing odds only"):
+                        if closing > 0:
+                            df = apply_clv_to_row(df, idx, closing)
+                            df.loc[idx, "closing_source"] = closing_source
+                            df.loc[idx, "result_notes"] = result_notes
+                            save_log(df)
+                            st.success("Closing odds + CLV saved.")
+                            st.rerun()
+                        else:
+                            st.warning("Enter closing odds first.")
+                with col_save2:
+                    if st.button("Save result + CLV"):
+                        df.loc[idx, "result"] = result
+                        df.loc[idx, "settled_at"] = iso_z(datetime.now(timezone.utc))
+                        df.loc[idx, "profit_units"] = profit_units_for_result(result, entry_odds)
+                        df.loc[idx, "closing_source"] = closing_source
+                        df.loc[idx, "result_notes"] = result_notes
+                        if closing > 0:
+                            df = apply_clv_to_row(df, idx, closing)
+                        else:
+                            df.loc[idx, "clv_status"] = "NO CLOSING ODDS"
+                        save_log(df)
+                        st.success("Result saved.")
+                        st.rerun()
+
+            st.markdown("### Recent paper log")
+            show_cols = [c for c in ["created_at", "source_mode", "proof_bucket", "sport", "game", "pick_label", "entry_odds", "closing_odds", "clv_pct", "clv_status", "result", "profit_units"] if c in df.columns]
+            st.dataframe(df[show_cols].head(50), use_container_width=True, hide_index=True)
+
+    with tabs[9]:
+        st.subheader("📊 Dashboard — Proof Lab")
+        df = ensure_log_columns(load_log())
+        if df.empty:
+            st.info("No paper picks logged yet.")
+        else:
+            settled = df[df["result"].astype(str).isin(["Won", "Lost", "Push"])].copy()
+            pending = df[df["result"].astype(str).fillna("Pending").eq("Pending")].copy()
+
+            profit = pd.to_numeric(settled.get("profit_units", pd.Series(dtype=float)), errors="coerce").fillna(0).sum() if not settled.empty else 0.0
+            wins = int((settled["result"].astype(str) == "Won").sum()) if not settled.empty else 0
+            losses = int((settled["result"].astype(str) == "Lost").sum()) if not settled.empty else 0
+            win_rate = wins / max(wins + losses, 1)
+            roi = profit / max(len(settled), 1)
+
+            clv_series = pd.to_numeric(settled.get("clv_pct", pd.Series(dtype=float)), errors="coerce").dropna()
+            pos_clv_pct = float((clv_series > 0).mean() * 100) if len(clv_series) else 0.0
+            avg_clv = float(clv_series.mean()) if len(clv_series) else 0.0
+
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("Settled", len(settled))
+            d2.metric("Pending", len(pending))
+            d3.metric("Profit units", f"{profit:+.2f}u")
+            d4.metric("ROI / pick", f"{roi*100:+.1f}%")
+
+            d5, d6, d7, d8 = st.columns(4)
+            d5.metric("Win rate", f"{win_rate*100:.1f}%")
+            d6.metric("Avg CLV", f"{avg_clv:+.2f}%")
+            d7.metric("Positive CLV", f"{pos_clv_pct:.1f}%")
+            d8.metric("Proof", f"{len(settled)}/300")
 
             st.progress(min(1, len(settled) / 300), text=f"Proof progress: {len(settled)}/300 settled paper picks")
-            st.metric("Positive CLV", f"{((clv > 0).mean()*100 if len(clv) else 0):.1f}%")
-            st.warning("System verdict: NOT PROVEN — keep paper testing." if len(settled) < 300 else "300-pick proof reached. Review ROI and CLV carefully.")
 
-            if "market" in df.columns:
-                st.subheader("Performance by market")
-                st.dataframe(df.groupby("market", dropna=False).size().reset_index(name="paper_picks"), use_container_width=True)
+            if len(settled) < 300:
+                st.warning("System verdict: NOT PROVEN — keep paper testing. Do not use this as real-money proof yet.")
+            elif profit > 0 and avg_clv > 0 and pos_clv_pct >= 52:
+                st.success("300-pick proof reached with positive profit and positive CLV. Review carefully before trusting anything.")
+            else:
+                st.error("300-pick proof reached but proof is weak. Tighten the rules before trusting the system.")
+
+            def group_summary(group_col: str) -> pd.DataFrame:
+                if settled.empty or group_col not in settled.columns:
+                    return pd.DataFrame()
+                g = settled.copy()
+                g["profit_units_num"] = pd.to_numeric(g["profit_units"], errors="coerce").fillna(0)
+                g["clv_pct_num"] = pd.to_numeric(g["clv_pct"], errors="coerce")
+                out = g.groupby(group_col, dropna=False).agg(
+                    picks=("result", "count"),
+                    wins=("result", lambda s: int((s.astype(str) == "Won").sum())),
+                    losses=("result", lambda s: int((s.astype(str) == "Lost").sum())),
+                    profit_units=("profit_units_num", "sum"),
+                    avg_clv_pct=("clv_pct_num", "mean"),
+                ).reset_index()
+                out["win_rate_pct"] = out["wins"] / out[["wins", "losses"]].sum(axis=1).replace(0, 1) * 100
+                out["roi_pct"] = out["profit_units"] / out["picks"].replace(0, 1) * 100
+                return out.sort_values(["profit_units", "avg_clv_pct"], ascending=[False, False])
+
+            st.markdown("### Performance splits")
+            split_col = st.selectbox("Split by", ["source_mode", "proof_bucket", "sport", "market", "data_confidence", "research_status", "sharp_status"], index=0)
+            split_df = group_summary(split_col)
+            if split_df.empty:
+                st.info("Not enough settled data for this split yet.")
+            else:
+                st.dataframe(split_df, use_container_width=True, hide_index=True)
+
+            if not settled.empty:
+                st.markdown("### Settled picks")
+                show_cols = [c for c in ["settled_at", "source_mode", "proof_bucket", "sport", "game", "pick_label", "entry_odds", "closing_odds", "clv_pct", "clv_status", "result", "profit_units"] if c in settled.columns]
+                st.dataframe(settled[show_cols], use_container_width=True, hide_index=True)
 
     with tabs[10]:
+        st.subheader("📈 CLV Tracker")
+        st.info("CLV = Closing Line Value. For decimal odds, positive CLV means your entry odds were better than the closing odds.")
+
+        df = ensure_log_columns(load_log())
+        if df.empty:
+            st.info("No paper picks logged yet.")
+        else:
+            clv_num = pd.to_numeric(df["clv_pct"], errors="coerce")
+            has_clv = clv_num.notna()
+            missing_closing = pd.to_numeric(df["closing_odds"], errors="coerce").fillna(0) <= 0
+
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Logged picks", len(df))
+            c2.metric("With CLV", int(has_clv.sum()))
+            c3.metric("Missing closing", int(missing_closing.sum()))
+            c4.metric("Positive CLV", f"{((clv_num[has_clv] > 0).mean()*100 if has_clv.any() else 0):.1f}%")
+
+            editable = df.copy()
+            labels = editable.apply(
+                lambda r: f"{r.name}: {r.get('pick_label','Pick')} @ {r.get('entry_odds', r.get('best_odds',''))} — close {r.get('closing_odds','')} — {r.get('game','')}",
+                axis=1
+            ).tolist()
+            selected = st.selectbox("Update CLV for a paper pick", labels)
+            idx = int(selected.split(":")[0])
+            entry_odds = safe_float(df.loc[idx].get("entry_odds", df.loc[idx].get("best_odds", 0)), 0)
+            existing_close = safe_float(df.loc[idx].get("closing_odds", 0), 0)
+
+            st.write(f"**Entry odds:** {entry_odds:.2f}" if entry_odds else "**Entry odds:** —")
+            new_close = st.number_input("Closing decimal odds", min_value=0.0, value=float(existing_close), step=0.01, key="clv_tracker_closing")
+            source = st.text_input("Closing source/book", value=str(df.loc[idx].get("closing_source", "") or ""), key="clv_tracker_source")
+
+            if new_close > 0 and entry_odds > 0:
+                m = clv_metrics(entry_odds, new_close)
+                st.metric("CLV preview", f"{m['clv_pct']:+.2f}%", delta=m["clv_status"])
+                st.metric("Implied probability edge", f"{m['clv_edge_pp']:+.2f} percentage points")
+
+            if st.button("Save CLV update"):
+                if new_close <= 0:
+                    st.warning("Enter a closing price first.")
+                else:
+                    df = apply_clv_to_row(df, idx, new_close)
+                    df.loc[idx, "closing_source"] = source
+                    save_log(df)
+                    st.success("CLV updated.")
+                    st.rerun()
+
+            st.markdown("### CLV table")
+            show_cols = [c for c in ["created_at", "source_mode", "sport", "game", "pick_label", "entry_odds", "closing_odds", "logged_implied_pct", "closing_implied_pct", "clv_pct", "clv_edge_pp", "clv_status", "result", "profit_units"] if c in df.columns]
+            clv_table = df[show_cols].copy()
+            st.dataframe(clv_table, use_container_width=True, hide_index=True)
+
+            st.warning("Proof rule: good short-term results without positive CLV can be luck. Positive CLV over 300+ paper picks is stronger evidence.")
+    with tabs[11]:
         st.subheader("🛡️ Backup")
         df = load_log()
         if not df.empty:
@@ -2989,11 +3281,11 @@ def main():
             except Exception as e:
                 st.error(f"Restore failed: {e}")
 
-    with tabs[11]:
+    with tabs[12]:
         st.subheader("ℹ️ Health Check / About")
         st.write("This page tells you whether the app is running correctly, what each command does, and what to check before trusting any paper pick.")
 
-        app_version = "GOAT Shield Live v4.6 AUTO MODE"
+        app_version = "GOAT Shield Live v4.7 CLV PROOF TRACKER"
         events_health = st.session_state.get("events_v36", [])
         markets_health = st.session_state.get("markets_v36", markets)
         metas_health = st.session_state.get("metas_v36", [])
@@ -3164,7 +3456,7 @@ def main():
         st.warning("This app is a paper-betting shield, not proof of profit yet. You still need 300 settled paper picks before treating the system as proven.")
 
 
-    with tabs[12]:
+    with tabs[13]:
         st.subheader("🧠 Research Guard")
         st.info("This is the missing sports-research layer: injuries, lineups/starters, weather, last-5 form, standings/motivation, travel/fatigue, and public-heavy risk.")
 
@@ -3309,7 +3601,7 @@ def main():
                     st.dataframe(saved_df[show_cols], use_container_width=True, hide_index=True)
 
 
-    with tabs[13]:
+    with tabs[14]:
         st.subheader("🤖 Auto Mode")
         st.warning("Paper-only automatic mode. This does not place bets. It does not guarantee profit. It is a way to automatically shortlist market-clean paper picks.")
         st.info("Full sports research cannot be truly automatic without reliable injury/lineup/stats/weather APIs. This tab is honest: unknown research stays visible.")
@@ -3405,12 +3697,36 @@ def main():
                             st.markdown(f"**Lock:** {row.get('log_lock_status', '')}")
                             st.caption(str(row.get("log_lock_reason", "")))
 
+                    st.markdown("### Paper-log from Auto Mode")
+                    slots_left = int(rules.get("max_daily", 3)) - approved_today_count(load_log())
+                    if slots_left <= 0:
+                        st.error("Daily paper-log limit reached. Do not add more picks today.")
+                    else:
+                        auto_labels = final_auto.apply(
+                            lambda x: f"{x.name}: {x.get('pick','')} @ {x.get('best_odds','')} — {x.get('game','')} — {x.get('start_nz','')}",
+                            axis=1
+                        ).tolist()
+                        auto_choice = st.selectbox("Auto candidate to paper-log", auto_labels, key="auto_mode_log_select")
+                        auto_idx = int(auto_choice.split(":")[0])
+                        chosen_auto = final_auto.loc[auto_idx].to_dict()
+                        source_mode = "Auto Mode — Market Only" if "AUTO MODE" in str(chosen_auto.get("research_lock_status", "")) else "Auto Mode — Research Clear"
+                        if st.button("Log selected AUTO candidate as PAPER pick"):
+                            current_log = load_log()
+                            log_row = make_log_row(chosen_auto, source_mode)
+                            if duplicate_paper_pick(current_log, log_row):
+                                st.warning("This pick already exists in your paper log.")
+                            else:
+                                new_df = pd.concat([pd.DataFrame([log_row]), current_log], ignore_index=True)
+                                save_log(new_df)
+                                st.success("Auto candidate logged as PAPER pick only.")
+                                st.rerun()
+
                 st.divider()
                 st.caption("Honest rule: Full automatic sports research needs proper APIs. Until then, Auto Mode is market-based plus visible research warnings.")
 
 
     st.divider()
-    st.caption("GOAT Shield Live v4.6 AUTO MODE is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
+    st.caption("GOAT Shield Live v4.7 CLV PROOF TRACKER is paper-only. It does not place real-money bets, log into sportsbooks, scrape bookmakers, or bypass betting rules.")
 
 
 if __name__ == "__main__":

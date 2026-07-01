@@ -1,4 +1,4 @@
-# iPhone install guide — v4.6 Auto Mode
+# iPhone install guide — v4.7 CLV Proof Tracker
 
 Unzip first. Do not upload only the ZIP to GitHub.
 
@@ -15,13 +15,12 @@ Then:
 3. If old version stays, clear cache/reboot.
 
 Success title:
-GOAT Shield Live v4.6 AUTO MODE
+GOAT Shield Live v4.7 CLV PROOF TRACKER
 
-Recommended safe use:
+How to use:
 1. Fetch NZ Bettor Board.
-2. Wait 30-60 seconds.
-3. Fetch again.
-4. Open 🤖 Auto Mode.
-5. Keep Market-Only Auto paper picks OFF if you want strict research.
-6. Turn it ON only for paper-testing automatic market picks.
-7. Never use this for real-money auto betting.
+2. Use 🤖 Auto Mode or 🎯 Picks.
+3. Paper-log only selected picks.
+4. Before/near game start, record closing odds in 📈 CLV Tracker or ✅ Results.
+5. After game ends, save Won/Lost/Push.
+6. Judge the system only after 300 settled paper picks.
